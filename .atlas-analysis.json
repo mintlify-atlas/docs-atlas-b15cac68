@@ -1,0 +1,133 @@
+{
+  "projectType": "saas",
+  "projectName": "Gestión Gente",
+  "projectDescription": "A full-stack HR management platform (SaaS) for Peruvian businesses, handling employee records, attendance tracking, vacation management, role-based access control, and organizational structure across multiple locations.",
+  "theme": "linden",
+  "primaryColor": "#2563EB",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Getting Started",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Setup",
+            "pages": ["setup/authentication", "setup/roles-permissions", "setup/organization-structure"]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "Dashboard",
+            "pages": ["features/dashboard"]
+          },
+          {
+            "group": "Employee Management",
+            "pages": [
+              "features/employees/overview",
+              "features/employees/register",
+              "features/employees/lifecycle",
+              "features/employees/my-team"
+            ]
+          },
+          {
+            "group": "Attendance",
+            "pages": [
+              "features/attendance/overview",
+              "features/attendance/attendance-list",
+              "features/attendance/manual-attendance",
+              "features/attendance/validation"
+            ]
+          },
+          {
+            "group": "Vacations & Requests",
+            "pages": [
+              "features/vacations/overview",
+              "features/vacations/vacation-dashboard",
+              "features/vacations/bulk-upload",
+              "features/requests/requests-list",
+              "features/requests/calendar"
+            ]
+          },
+          {
+            "group": "Reports",
+            "pages": [
+              "features/reports/overview",
+              "features/reports/export"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "features/config/roles-management",
+              "features/config/positions",
+              "features/config/areas",
+              "features/config/schedules",
+              "features/config/hierarchy",
+              "features/config/mobile-access"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Administration",
+        "groups": [
+          {
+            "group": "Access Control",
+            "pages": [
+              "admin/rbac",
+              "admin/user-access",
+              "admin/allowed-sedes"
+            ]
+          },
+          {
+            "group": "Database",
+            "pages": [
+              "admin/supabase-setup",
+              "admin/migrations",
+              "admin/rls-policies"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-location employee management across branches (sedes)",
+    "Real-time attendance tracking with geolocation support",
+    "Role-based access control (RBAC) with granular module permissions",
+    "Vacation management with balance tracking and bulk Excel upload",
+    "Organizational hierarchy management with supervisor assignments",
+    "AI-powered monthly reports for authorized administrators",
+    "Mobile access configuration for field employees",
+    "Leave requests with calendar view and approval workflow",
+    "Reports center with Excel export for employees, attendance, vacations, and terminations",
+    "Supabase-powered backend with Row Level Security (RLS)"
+  ],
+  "publicApiSurface": [
+    "GET /employees — List employees with role-scoped filtering",
+    "POST /register-employee — Create new employee record",
+    "GET /attendance-list — View attendance records with pagination",
+    "GET /requests — View pending leave/absence requests",
+    "GET /calendar — Calendar view of approved requests",
+    "GET /vacaciones — Vacation dashboard with balance overview",
+    "GET /reports — Reports center for data export",
+    "GET /roles — Role management and module permissions",
+    "GET /positions — Job positions configuration",
+    "GET /areas — Organizational areas management",
+    "GET /schedules — Work schedules management",
+    "GET /hierarchy-management — Supervisor hierarchy configuration",
+    "GET /organization-structure — Organization structure management",
+    "GET /mobile-access-config — Mobile app access configuration",
+    "supabase.rpc('get_employees_by_user_area') — Fetch employees by user's area scope",
+    "supabase.rpc('get_dashboard_stats') — Fetch dashboard statistics",
+    "supabase.rpc('get_dashboard_stats_local_boss') — Dashboard stats for local managers"
+  ]
+}
