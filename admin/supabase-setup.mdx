@@ -13,12 +13,16 @@ description: "Guía paso a paso para conectar un proyecto Supabase nuevo a la pl
 
 ## Variables de entorno
 
-Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
+Crea un archivo `.env.development` en la raíz del proyecto con las siguientes variables:
 
-```bash
-VITE_SUPABASE_URL=https://<tu-proyecto>.supabase.co
+```bash .env.development
+VITE_SUPABASE_URL=http://localhost:5173/supabase-proxy
 VITE_SUPABASE_ANON_KEY=<tu-anon-key>
 ```
+
+<Note>
+  Durante el desarrollo local, `VITE_SUPABASE_URL` apunta al proxy del servidor Vite (`/supabase-proxy`), que redirige las peticiones a `https://supabase.pauserdistribucionessac.com`. Este valor no necesita cambiarse para desarrollo local. La clave anon key es la misma que la de tu proyecto Supabase en **Settings → API → Anon Key**.
+</Note>
 
 <Warning>
   Nunca incluyas la `service role key` en el frontend ni en el archivo `.env` que se sube al repositorio. Esa clave tiene acceso completo a la base de datos y omite RLS.

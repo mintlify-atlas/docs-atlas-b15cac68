@@ -1,97 +1,77 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Gestión Gente"
+description: "HR management platform for multi-location Peruvian businesses — employee records, attendance, vacations, and more."
 ---
 
-## Setting up
+## What is Gestión Gente?
 
-Get your documentation site up and running in minutes.
+Gestión Gente is a full-stack HR management platform built for Peruvian businesses operating across multiple branches (sedes). It centralizes employee lifecycle management, real-time attendance tracking, vacation planning, and organizational configuration behind a role-based access control system.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+The platform is built with React, Vite, and Tailwind CSS on the frontend, and uses Supabase as its backend — providing a PostgreSQL database, authentication, Row Level Security policies, and real-time subscriptions out of the box.
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Set up the platform and create your first employee in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Authentication" icon="lock" href="/setup/authentication">
+    Configure Supabase auth and user access
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Roles & Permissions" icon="shield" href="/setup/roles-permissions">
+    Define roles and control module access with RBAC
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Organization Structure" icon="building" href="/setup/organization-structure">
+    Set up your sedes, business units, and areas
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Key features
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Employee Management" icon="users" href="/features/employees/overview">
+    Register, edit, and manage employees across all sedes with profile photos, position history, and lifecycle tracking
+  </Card>
+  <Card title="Attendance Tracking" icon="clock" href="/features/attendance/overview">
+    Real-time attendance records with geolocation, late-arrival detection, and bulk Excel import
+  </Card>
+  <Card title="Vacation Management" icon="calendar" href="/features/vacations/overview">
+    Track vacation balances, approve requests, and upload entitlements in bulk via Excel
+  </Card>
+  <Card title="Reports Center" icon="chart-bar" href="/features/reports/overview">
+    Export employee data, attendance records, new hires, vacation balances, and terminations to Excel
+  </Card>
+  <Card title="Role-Based Access" icon="key" href="/admin/rbac">
+    Granular module permissions per role — control read, write, and delete access for every section
+  </Card>
+  <Card title="Multi-location Support" icon="map-pin" href="/admin/allowed-sedes">
+    Assign managers visibility across multiple sedes and business units without global admin access
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Platform architecture
 
-## Need inspiration?
+Gestión Gente uses a single-page application architecture deployed at `/sebi-web`:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+- **Frontend**: React 18 with Vite, Tailwind CSS v4, React Router v6
+- **Backend**: Supabase (PostgreSQL, Auth, Realtime, Storage)
+- **Authentication**: Supabase Auth with email/password, session management via `AuthContext`
+- **Authorization**: RBAC via `role_modules` table and Row Level Security policies
+- **Charts**: Recharts for data visualization
+- **Excel**: `@e965/xlsx` for import/export operations
+- **PDF**: `html2pdf.js` for generating vacation vouchers (papeletas)
+
+## User roles
+
+The platform supports a hierarchy of user roles, each with configurable module permissions:
+
+| Role | Description |
+|------|-------------|
+| **Super Admin** | Full system access, set via Supabase `app_metadata` |
+| **Admin / Jefe de Gente** | Global access to all employees and data |
+| **Analista de Gente** | HR analyst at ADM. Central with broad read access |
+| **Gerente / Jefe de Área** | Manages employees within their area across sedes |
+| **Supervisor / Coordinador** | Manages their direct team at a specific sede |
+| **Employee** | Limited access to their own data |
+
+<Note>
+  User roles and their module permissions are fully configurable from the **Roles Management** page. The role hierarchy described above reflects the default configuration shipped with the platform.
+</Note>
