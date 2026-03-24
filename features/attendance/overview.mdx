@@ -1,0 +1,102 @@
+---
+title: Attendance tracking overview
+description: How the Gestión Gente platform records, stores, and surfaces employee attendance data across roles and locations.
+---
+
+The attendance module is the central source of truth for all employee time and presence records. It captures check-in and check-out events, classifies each record by type, detects late arrivals automatically, and streams updates in real time to every user who has permission to see them.
+
+## Record types
+
+Every attendance entry carries a `record_type` field that describes the nature of the event.
+
+<CardGroup cols={2}>
+  <Card title="ASISTENCIA" icon="circle-check">
+    Standard attendance. The employee clocked in on the work date. The `is_late` flag distinguishes on-time arrivals from tardiness.
+  </Card>
+  <Card title="FALTA JUSTIFICADA" icon="file-text">
+    Justified absence. The employee was absent but the reason has been accepted by HR.
+  </Card>
+  <Card title="AUSENCIA SIN JUSTIFICAR" icon="circle-x">
+    Unjustified absence. No approved justification exists for the absence.
+  </Card>
+  <Card title="DESCANSO MÉDICO" icon="heart-pulse">
+    Medical rest. Corresponds to a `SALUD / MÉDICO` vacation request that has been approved.
+  </Card>
+  <Card title="LICENCIA CON GOCE" icon="briefcase">
+    Paid leave. Corresponds to an approved `LICENCIA` vacation request.
+  </Card>
+  <Card title="VACACIONES" icon="plane">
+    Vacation days. Sourced from approved `vacation_requests` records rather than direct attendance entries.
+  </Card>
+</CardGroup>
+
+<Note>
+  `ENTRADA` and `SALIDA` are the raw event directions captured at clock-in and clock-out. The platform resolves them into a single daily record with `check_in` and `check_out` timestamps.
+</Note>
+
+## Late arrival detection
+
+The `is_late` boolean on each `ASISTENCIA` record is set by the database at the time the check-in is processed. The platform does not re-evaluate lateness on the client; it reads the value directly from the `attendance` table.
+
+In the attendance list, records where `is_late === true` display a **TARDANZA** badge, and those where `is_late === false` display **PUNTUAL**.
+
+## Geolocation
+
+Two location fields can be stored per record:
+
+| Field | Direction | Description |
+|---|---|---|
+| `location_in` | Entry | GPS coordinates captured when the employee clocked in |
+| `location_out` | Exit | GPS coordinates captured when the employee clocked out |
+
+When `location_in` is present on a record, a **MapPin** indicator appears in the attendance list. Clicking it opens a location modal showing the coordinates.
+
+<Tip>
+  Location data is optional. Records without geolocation are still valid and fully displayed — the MapPin indicator is simply absent.
+</Tip>
+
+## Real-time feed
+
+The attendance list subscribes to the `attendance` table via a Supabase realtime channel named `attendance_list_updates`. Any `INSERT`, `UPDATE`, or `DELETE` event on that table automatically triggers a reload of the current page, so supervisors and HR staff always see the latest state without manual refreshing.
+
+```javascript
+const subscription = supabase
+  .channel('attendance_list_updates')
+  .on(
+    'postgres_changes',
+    { event: '*', schema: 'public', table: 'attendance' },
+    () => {
+      loadAttendances(currentPage)
+    }
+  )
+  .subscribe()
+```
+
+## Role-scoped visibility
+
+What a user can see depends on their role and position. The platform uses the following hierarchy:
+
+<AccordionGroup>
+  <Accordion title="Global admins — see everything">
+    Users with role `ADMIN`, `SUPER ADMIN`, or `JEFE_RRHH`, and users whose `position` includes `JEFE DE GENTE` or `GERENTE GENERAL`, can query attendance across all sedes and business units. The RPC `get_daily_attendance_report` is called without sede or business unit restrictions.
+  </Accordion>
+  <Accordion title="Analista de Gente y Gestión">
+    An Analista whose sede contains `ADM. CENTRAL` and whose business unit contains `ADMINISTRACIÓN` is treated as a global admin. All other Analistas see only their own sede and business unit.
+  </Accordion>
+  <Accordion title="Bosses (Jefes, Gerentes, Coordinadores, Supervisores)">
+    Identified by role or position containing `JEFE`, `GERENTE`, `COORDINADOR`, or `SUPERVISOR`. The database RPC handles area-level filtering internally — no client-side whitelist is applied.
+  </Accordion>
+  <Accordion title="Standard employees">
+    Employees who are not in any of the above categories see only the employees returned by the `get_employees_by_user_area` RPC, which scopes results to their area.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Validation actions (approving or rejecting records) are restricted to users with role `ADMIN`, `SUPER ADMIN`, or `JEFE_RRHH`, or positions that include `ANALISTA DE GENTE Y GESTION`, `JEFE DE AREA DE GENTE Y GESTION`, or `JEFE DE GENTE Y GESTION`. Users without these permissions see a read-only "Modo Lectura" notice.
+</Warning>
+
+## Pagination
+
+The attendance list loads records in pages of 20 (`PAGE_SIZE = 20`). Server-side pagination via Supabase `.range()` is used for global admin queries in historical mode. All other queries (roster mode, non-admin users, in-memory filtered results) are paginated client-side after the full filtered list is assembled.
+
+The total number of pages is calculated as `Math.ceil(totalRecords / PAGE_SIZE)`.

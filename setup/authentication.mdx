@@ -1,0 +1,307 @@
+---
+title: "Authentication"
+description: "How Gestión Gente authenticates users, loads employee profiles, and enforces access control using Supabase Auth and a custom AuthContext."
+---
+
+## Overview
+
+The platform uses **Supabase Auth** with email/password sign-in. After a user authenticates, `AuthContext.jsx` loads the employee's profile from the `employees` table, resolves their role and module-level permissions, and validates that they are allowed to access the web platform.
+
+```
+User signs in → Supabase Auth session created
+             → fetchProfile() runs
+             → employees table queried
+             → roles table queried (if role_id set)
+             → access validations run
+             → user state populated
+             → app renders
+```
+
+## Supabase Auth (email/password)
+
+The Supabase client is initialized in `src/lib/supabase.js` using two environment variables:
+
+```javascript src/lib/supabase.js
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+const TIMEOUT_MS = 25000
+
+const fetchWithTimeout = (url, options = {}) => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer))
+}
+
+export const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
+  global: { fetch: fetchWithTimeout }
+})
+```
+
+<Note>
+  All Supabase requests have a 25-second global timeout. If the server does not respond within that window, the request is aborted and the caller receives an error rather than hanging indefinitely.
+</Note>
+
+Sign-in is triggered from `src/pages/Login.jsx` via `signInWithEmail(email, password)`. The login form enforces:
+
+- Both fields are required
+- The email must match a standard email format
+- The password must be at least 6 characters
+
+## AuthContext
+
+`AuthContext.jsx` provides authentication state to the entire app through a React context. Wrap your component tree with `<AuthProvider>` and consume state with the `useAuth()` hook.
+
+```javascript src/context/AuthContext.jsx
+const AuthContext = createContext({})
+
+export const useAuth = () => useContext(AuthContext)
+```
+
+### State exposed by `useAuth()`
+
+| Property | Type | Description |
+|---|---|---|
+| `session` | object \| null | Active Supabase Auth session |
+| `user` | object \| null | Enriched employee profile |
+| `loading` | boolean | `true` while the profile is being fetched |
+| `signOut` | function | Clears state and calls `supabase.auth.signOut()` |
+| `refreshProfile` | function | Re-runs `fetchProfile()` for the current session user |
+
+### Session management
+
+On mount, `AuthProvider` retrieves the current session and subscribes to auth state changes:
+
+```javascript src/context/AuthContext.jsx
+// 1. Get initial session
+supabase.auth.getSession().then(({ data: { session } }) => {
+  setSession(session)
+  if (session?.user) {
+    fetchProfile(session.user)
+  } else {
+    setUser(null)
+    setLoading(false)
+  }
+})
+
+// 2. Listen for changes
+const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+  if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+    setSession(null)
+    setUser(null)
+    setLoading(false)
+  } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+    setSession(session)
+    if (session?.user) {
+      const isTokenRefresh = event === 'TOKEN_REFRESHED';
+      const hasUserLoaded = !!userRef.current;
+
+      if (!isTokenRefresh || !hasUserLoaded) {
+        if (!hasUserLoaded) {
+          setLoading(true);
+        }
+        fetchProfile(session.user);
+      }
+    }
+  }
+})
+```
+
+<Note>
+  When a `TOKEN_REFRESHED` event fires and the user profile is already loaded, `fetchProfile()` is **not** called again. This prevents the app from re-rendering or flashing a loading screen when the browser tab is restored after being minimized.
+</Note>
+
+## Profile loading (`fetchProfile`)
+
+`fetchProfile(authUser)` runs after every `SIGNED_IN` event. It queries the database to build the full `user` object with role and permissions.
+
+### Step 1 — Super Admin shortcut
+
+If the Supabase Auth user's `app_metadata` contains `is_super_admin: true`, the profile is built immediately without any database queries:
+
+```javascript src/context/AuthContext.jsx
+if (authUser.app_metadata?.is_super_admin === true) {
+  const superAdminUser = {
+    ...authUser,
+    id: authUser.id,
+    role: 'SUPER ADMIN',
+    position: 'SISTEMAS',
+    full_name: 'Super Administrador',
+    sede: null,
+    business_unit: null,
+    permissions: { '*': { read: true, write: true, delete: true } },
+    allowed_sedes: [],
+  };
+  setUser(superAdminUser);
+  setLoading(false);
+  return;
+}
+```
+
+<Warning>
+  `app_metadata` can only be written using the Supabase **service role key** — it cannot be modified from the browser client. This prevents privilege escalation by end users.
+</Warning>
+
+### Step 2 — Query the `employees` table
+
+The employee record is fetched by matching the auth user's email against the `employees` table (case-insensitive):
+
+```javascript src/context/AuthContext.jsx
+const { data: simpleEmployee, error: empError } = await supabase
+  .from('employees')
+  .select('*, role_id')
+  .ilike('email', authUser.email)
+  .maybeSingle();
+```
+
+If the employee has a `role_id`, the corresponding role record is fetched separately from the `roles` table in a second query. This two-step approach avoids complex joins that can trigger RLS recursion:
+
+```javascript src/context/AuthContext.jsx
+if (simpleEmployee.role_id) {
+  const { data: roleData } = await supabase
+    .from('roles')
+    .select('*')
+    .eq('id', simpleEmployee.role_id)
+    .single();
+
+  if (roleData) {
+    employeeData.roles = roleData;
+  }
+}
+```
+
+<Note>
+  If the authenticated user has no record in the `employees` table, `supabase.auth.signOut()` is called automatically and access is denied.
+</Note>
+
+### Step 3 — Active user validation
+
+Before building the user state, `fetchProfile` checks that the employee is active:
+
+```javascript src/context/AuthContext.jsx
+if (employeeData.is_active === false) {
+  showToast('Tu cuenta ha sido desactivada. Contacta a RRHH.', 'error');
+  await supabase.auth.signOut();
+  setUser(null);
+  setSession(null);
+  return;
+}
+```
+
+<Warning>
+  If `employees.is_active` is `false`, the user is signed out immediately regardless of any other settings.
+</Warning>
+
+### Step 4 — Web access validation
+
+If the employee's role has `web_access` set to `false` in the `roles` table, access to the web platform is denied:
+
+```javascript src/context/AuthContext.jsx
+if (employeeData.roles && employeeData.roles.web_access === false) {
+  showToast('Tu rol actual no tiene permisos para acceder a la plataforma Web.', 'error');
+  await supabase.auth.signOut();
+  setUser(null);
+  setSession(null);
+  return;
+}
+```
+
+<Note>
+  This check only applies when a role is assigned. Employees without any role assigned are not blocked by this validation.
+</Note>
+
+### Step 5 — Role and permissions resolution
+
+Once validations pass, the role name is resolved using this priority order:
+
+1. `roles.name` (relational FK, preferred)
+2. `employees.role` (legacy field)
+3. `employees.employee_type` (fallback)
+
+Module-level permissions are loaded from the `role_modules` table using the resolved role name:
+
+```javascript src/context/AuthContext.jsx
+const queryRoleModules = async (name) => {
+  if (!name) return null;
+  const { data } = await supabase
+    .from('role_modules')
+    .select('module_key, can_read, can_write, can_delete')
+    .ilike('role_name', name);
+  return data && data.length > 0 ? data : null;
+};
+```
+
+The lookup falls back in this order if no exact match is found:
+
+1. Match by `position` (the employee's exact job title)
+2. Fallback to a role category prefix (`JEFE`, `GERENTE`, `SUPERVISOR`, `COORDINADOR`, `ANALISTA`)
+3. If the role is `ADMIN`, `SUPER ADMIN`, or `ADMINISTRADOR GENERAL` and no entries are found, full access (`{ '*': { read: true, write: true, delete: true } }`) is granted
+
+### The final `user` object
+
+After all queries succeed, the user state is set with a combined object:
+
+```javascript src/context/AuthContext.jsx
+const finalUser = {
+  ...authUser,
+  employee_id: employeeData.id,
+  role: roleName,
+  role_details: employeeData.roles || {},
+  permissions: modulePermissions,
+  full_name: employeeData.full_name,
+  position: employeeData.position,
+  sede: employeeData.sede,
+  business_unit: employeeData.business_unit,
+  allowed_sedes: allowedSedes,
+  profile: employeeData
+};
+```
+
+## Realtime permission refresh
+
+While the user is logged in, `AuthContext` subscribes to Supabase Realtime on two tables:
+
+- **`role_modules`** — if a row changes for the user's current role, `fetchProfile` is called to reload permissions
+- **`user_allowed_sedes`** — if a row changes for the current employee ID, `fetchProfile` is called to reload their allowed sede list
+
+This means permission changes take effect immediately without requiring users to log out and back in.
+
+## Session persistence and token refresh
+
+The Supabase JS client handles session persistence automatically using browser storage. When the access token nears expiry, Supabase refreshes it and fires a `TOKEN_REFRESHED` event.
+
+`AuthContext` listens for this event but skips re-running `fetchProfile` if the user is already loaded:
+
+```javascript src/context/AuthContext.jsx
+const isTokenRefresh = event === 'TOKEN_REFRESHED';
+const hasUserLoaded = !!userRef.current;
+
+if (!isTokenRefresh || !hasUserLoaded) {
+  fetchProfile(session.user);
+}
+```
+
+This prevents the app from showing a loading screen or resetting component state when a token refresh happens in the background.
+
+## Error handling
+
+Network and server errors during profile loading are handled without signing the user out:
+
+- **Network errors** (failed fetch, abort): a toast is shown, `loading` is set to `false`, and the session is preserved
+- **Server errors** (status 5xx, schema cache issues): same behavior — the session is preserved and the user is prompted to reload
+- **Application errors** (no employee record, inactive user, no web access): the user is signed out and an appropriate message is shown
+
+## Sign out
+
+Call `signOut()` from `useAuth()` to end the session:
+
+```javascript
+const { signOut } = useAuth()
+
+await signOut()
+```
+
+This clears both the `session` and `user` state locally, then calls `supabase.auth.signOut()` to invalidate the session on the server. The app then redirects to `/login`.

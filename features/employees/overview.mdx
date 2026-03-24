@@ -1,0 +1,97 @@
+---
+title: Gestión de Empleados
+description: Tabla central de colaboradores con filtros por sede, unidad, área y tipo, descarga en Excel y acceso al perfil individual.
+---
+
+La página de empleados (`EmployeesList`) es el directorio central de colaboradores de la plataforma. Muestra una tabla con todos los empleados activos dentro del alcance del usuario autenticado, con filtros, búsqueda y acciones de gestión.
+
+## Tabla de empleados
+
+Cada fila de la tabla muestra las siguientes columnas:
+
+| Columna | Datos incluidos |
+|---|---|
+| **Colaborador** | Foto de perfil (o avatar con inicial), nombre completo, puesto y tipo de empleado (`ADMINISTRATIVO` / `OPERATIVO`) |
+| **Contacto** | Correo corporativo, teléfono y DNI |
+| **Sede / Área** | Sede, unidad de negocio y área (derivada del cargo) |
+| **Ingreso** | Fecha de ingreso formateada |
+| **Estado** | Indicador `Activo` / `Inactivo` |
+| **Acciones** | Ver perfil, editar, dar de baja, eliminar |
+
+Al pie de la tabla se muestra el conteo `N de M colaboradores` y el desglose de activos e inactivos en el conjunto cargado.
+
+<Note>
+  Las acciones de edición, baja y eliminación solo aparecen para usuarios con `canManage = true`: Jefe de Gente, roles `ADMIN`/`SUPER ADMIN`/`JEFE_RRHH`, y Analistas de Gente de `ADM. CENTRAL` en la unidad `ADMINISTRACIÓN` o `ADMINISTRACION`.
+</Note>
+
+## Filtros disponibles
+
+El componente `EmployeesFilterBar` ofrece cuatro filtros encadenados y un buscador de texto libre:
+
+<CardGroup cols={2}>
+  <Card title="Sede">
+    Filtra por sede. Al cambiar la sede se resetean los filtros de unidad y área. Para administradores globales se complementa con datos de `getOrganizationStructure()` para mostrar también sedes sin empleados aún registrados.
+  </Card>
+  <Card title="Unidad de negocio">
+    Disponible solo cuando hay una sede seleccionada (o cuando solo hay una sede). Al cambiar la unidad se resetea el filtro de área.
+  </Card>
+  <Card title="Área">
+    Derivada del campo `job_positions.areas.name` o del mapa `positionAreaMap` (cargo → área). **Bloqueada** cuando el usuario tiene un área restringida por su posición (`userRestrictedArea`).
+  </Card>
+  <Card title="Tipo">
+    Filtra entre `ADMINISTRATIVO` (puestos que incluyen Jefe, Analista, Coordinador, Asistente) y `OPERATIVO` (resto).
+  </Card>
+</CardGroup>
+
+El buscador de texto acepta nombre completo o DNI. La comparación es case-insensitive y normaliza acentos.
+
+## Visibilidad según rol
+
+<Tabs>
+  <Tab title="Administrador global">
+    Ve todos los empleados activos sin restricción de sede ni unidad. La URL puede incluir un parámetro de sede (`/employees/:sede`) o unidad (`?business=`) que pre-filtra la vista, pero el usuario puede modificarlos libremente.
+  </Tab>
+  <Tab title="Jefe local">
+    Ve los empleados de su sede principal y de las sedes adicionales asignadas en `user_allowed_sedes` (con sus unidades de negocio correspondientes). Si tiene **área restringida** (p. ej. Jefe de Operaciones), el filtro de área se aplica automáticamente y no puede cambiarse.
+
+    Las áreas restringidas se deducen de la posición del usuario:
+
+    | Posición incluye | Área restringida |
+    |---|---|
+    | `OPERACIONES` | OPERACIONES |
+    | `COMERCIAL` o `VENTAS` | COMERCIAL |
+    | `ALMACEN` o `LOGISTICA` | ALMACEN |
+    | `DISTRIBUCION` o `TRANSPORTE` | DISTRIBUCION |
+    | `MANTENIMIENTO` | MANTENIMIENTO |
+    | `FINANZAS` o `CONTABILIDAD` | FINANZAS |
+    | `SISTEMAS` o `TI` | SISTEMAS |
+  </Tab>
+  <Tab title="Empleado regular">
+    Consulta empleados mediante el RPC `get_my_employees_v2`, acotado a su sede y unidad de negocio.
+  </Tab>
+</Tabs>
+
+### Resumen de sedes en la cabecera
+
+Cuando un jefe tiene sedes adicionales asignadas (`user.allowed_sedes.length > 0`) y no hay un parámetro de sede en la URL, aparece una barra de resumen debajo de la cabecera. Muestra cada sede con su unidad de negocio y el conteo de empleados activos, terminando con el total agregado.
+
+## Descarga de empleados en Excel
+
+El botón **Exportar** está disponible en la cabecera para usuarios con `canManage = true`. La exportación usa la lista de empleados ya filtrada en pantalla.
+
+<Tip>
+  Ajusta los filtros antes de exportar para obtener exactamente el subconjunto que necesitas.
+</Tip>
+
+## Modal de perfil del empleado
+
+Al pulsar **Ver** en cualquier fila se abre el componente `EmployeeProfileCard` dentro de un modal. El perfil muestra:
+
+- Foto de perfil con indicador de estado activo/inactivo.
+- Nombre, posición y tipo de empleado (`ADMINISTRATIVO` / `OPERATIVO`).
+- Sede, fecha de ingreso, DNI/CE, correo, teléfono y área.
+- **Historial de promociones** — si la tabla `job_history` tiene registros para ese empleado, se muestra una línea de tiempo con los cambios de puesto, sede y unidad, incluyendo la fecha y el motivo del cambio.
+
+## Importación masiva desde Excel
+
+El botón **Importar** (también bajo `canManage`) abre el componente `EmployeeExcelUpload` en un modal superpuesto. Permite cargar un archivo Excel con múltiples empleados a la vez. Tras la importación exitosa, la lista se recarga automáticamente.

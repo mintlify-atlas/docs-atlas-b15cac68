@@ -1,0 +1,115 @@
+---
+title: Requests list
+description: Review, filter, approve, and reject employee vacation and leave requests from a single table view.
+---
+
+The **Solicitudes** page is the primary interface for managing all employee requests — vacations, health leave, personal leave, and other absence types. Authorized users can approve or reject pending requests, view the generated Papeleta, and access the employee's signed document.
+
+## What the requests list shows
+
+The table displays one row per request with the following columns:
+
+| Column | Description |
+|---|---|
+| **Empleado** | Employee name and job position |
+| **Tipo / Motivo** | Request type and notes or reason |
+| **Fechas** | Start date, end date, and total days |
+| **Estado** | Status badge. For approved or rejected requests, also shows the name, sede, business unit, and position of the approver. |
+| **Acciones** | Action buttons depending on request status |
+
+Requests are ordered by creation date, newest first.
+
+## Request types
+
+The `request_type` field stores the type of absence. The Requests List page displays this value as-is in the **Tipo** column. The CalendarRequests view groups types into four categories for display:
+
+| Category | Matches |
+|---|---|
+| VACACIONES | Type contains `VACACIONES` |
+| SALUD | Type contains `SALUD`, `MEDICO`, or `ENFERMEDAD` |
+| PERSONAL | Type contains `PERSONAL` or `FAMILIAR` |
+| OTROS | Anything else |
+
+## Request statuses
+
+Each request carries one of the following statuses:
+
+<Tabs>
+  <Tab title="PENDIENTE">
+    The request has been submitted and is awaiting review. Approve and reject buttons are shown in the actions column, but only if the request has a `signed_file_url` (the employee's uploaded signed copy).
+  </Tab>
+  <Tab title="APROBADO">
+    The request was approved. The Papeleta PDF was generated and stored in Supabase Storage at the time of approval. The approver's details are shown below the status badge.
+  </Tab>
+  <Tab title="COMPLETADO">
+    The leave period has ended.
+  </Tab>
+  <Tab title="RECHAZADO">
+    The request was rejected. The approver's details are shown below the status badge.
+  </Tab>
+  <Tab title="CANCELADO">
+    The request was cancelled.
+  </Tab>
+</Tabs>
+
+## How to approve or reject a request
+
+<Steps>
+  <Step title="Locate the pending request">
+    Use the search box to find the employee by name or DNI, or use the status filter to show only `PENDIENTE` requests.
+  </Step>
+  <Step title="Verify the signed document">
+    The approve and reject buttons are only enabled when the request has a `signed_file_url`. Click **Ver Firmado** to open the employee's signed document in a new tab and confirm it is correct.
+
+    <Warning>
+      If `signed_file_url` is absent, both buttons are disabled and show the tooltip "Pendiente de firma del empleado". You cannot approve or reject until the employee uploads their signed copy.
+    </Warning>
+  </Step>
+  <Step title="Click approve or reject">
+    Click the thumbs-up icon to approve or the thumbs-down icon to reject. A confirmation modal appears asking you to confirm the action.
+  </Step>
+  <Step title="Confirm the action">
+    Click the confirm button in the modal. The system:
+
+    - For **approval**: generates the Papeleta de Vacaciones PDF, uploads it to Supabase Storage under `papeletas/`, and stores the public URL in `pdf_url`
+    - Updates `status`, `validated_by` (the approving user's `employee_id`), and `validated_at` on the `vacation_requests` record
+    - Updates the row in the table immediately without a page reload
+
+    <Note>
+      If PDF generation fails during approval, the system logs a warning toast but still attempts to save the approved status. The `pdf_url` will be `null` in that case.
+    </Note>
+  </Step>
+  <Step title="Access the generated papeleta">
+    After approval, click the **Papeleta** button to open the papeleta view at `/papeleta/:id`, where you can print or download the PDF.
+  </Step>
+</Steps>
+
+## Filters
+
+The filter bar provides four controls that can be combined:
+
+| Filter | Options |
+|---|---|
+| Search | Employee name or DNI (free text) |
+| Status | All, Pendientes, Aprobados, Completados, Rechazados, Cancelados |
+| Month | January through December |
+| Year | A rolling window of four years (two past, current, one future) |
+
+Month and year filters operate on `start_date`. The year filter defaults to the current year on page load.
+
+Click **Actualizar** to reload all requests from the server.
+
+## Role-scoped filtering
+
+What requests a user sees is enforced after the initial query:
+
+**Global admins** (role `ADMIN`, `SUPER ADMIN`, `JEFE_RRHH`, position includes `JEFE DE GENTE` or `GERENTE GENERAL`, or the Analista de Gente Part Time exception in ADM. CENTRAL) see all requests.
+
+**All other users** go through two filtering steps:
+
+1. The `get_employees_by_user_area` Supabase RPC is called to get the set of employee IDs this user is allowed to see. Any request whose `employee_id` is not in that set is removed.
+2. For non-boss users, an additional filter restricts results to requests where the employee's `sede` matches the user's `sede` and `business_unit` matches the user's `business_unit`.
+
+<Note>
+  Bosses and supervisors (`isBoss = true`) skip step 2 because their area may span multiple sedes. The `get_employees_by_user_area` RPC already scopes data correctly for them.
+</Note>

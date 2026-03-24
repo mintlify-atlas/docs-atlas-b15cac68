@@ -1,0 +1,87 @@
+---
+title: Mi Equipo
+description: Vista de tarjetas con los colaboradores de la misma sede, unidad y área del usuario, pensada para supervisores, coordinadores y jefes de área.
+---
+
+**Mi Equipo** (`MyTeam`) es una vista orientada a los mandos intermedios. A diferencia de la lista completa de empleados, presenta los colaboradores en formato de tarjetas y está acotada estrictamente a la sede, unidad de negocio y —cuando aplica— el área del usuario autenticado.
+
+## ¿Quién puede ver Mi Equipo?
+
+La página está diseñada para **supervisores, coordinadores y jefes de área** que necesitan consultar a su equipo directo sin acceder a la gestión completa de RRHH. No requiere permisos de administrador global.
+
+El acceso está controlado por `ProtectedRoute`. Dentro de la página, los datos se filtran automáticamente según el perfil del usuario.
+
+## Datos mostrados
+
+Cada tarjeta de colaborador incluye:
+
+- Foto de perfil (o avatar con inicial y color generado por nombre).
+- Indicador de estado activo/inactivo.
+- Nombre completo y puesto.
+- Correo corporativo.
+- Teléfono.
+- Fecha de ingreso.
+- Botón **Ver** para abrir el modal de perfil completo (`EmployeeProfileCard`).
+
+## Alcance y filtrado
+
+La consulta de datos sigue esta lógica:
+
+<Steps>
+  <Step title="Filtro por sede">
+    Se aplica `eq('sede', user.sede)`. Solo se considera la sede principal del perfil del usuario. Mi Equipo no considera `user_allowed_sedes` (sedes adicionales); para eso se usa la lista completa de empleados.
+  </Step>
+  <Step title="Filtro por unidad de negocio">
+    Si el usuario tiene `business_unit`, se aplica `eq('business_unit', user.business_unit.toUpperCase())`.
+  </Step>
+  <Step title="Filtro por área (en cliente)">
+    Si la posición del usuario implica un área específica (`userArea`), el listado resultante se filtra adicionalmente en el cliente para mostrar solo los empleados cuyo cargo pertenece a esa área.
+
+    Las áreas se derivan de la posición del usuario con la misma lógica que en la lista de empleados:
+
+    | Posición incluye | Área mostrada |
+    |---|---|
+    | `OPERACIONES` | OPERACIONES |
+    | `COMERCIAL` o `VENTAS` | COMERCIAL |
+    | `ALMACEN` o `LOGISTICA` | ALMACEN |
+    | `DISTRIBUCION` o `TRANSPORTE` | DISTRIBUCION |
+    | `MANTENIMIENTO` | MANTENIMIENTO |
+    | `FINANZAS` o `CONTABILIDAD` | FINANZAS |
+    | `SISTEMAS`, `TECNOLOGIA`, `INFORMATICA` o ` TI` | SISTEMAS |
+  </Step>
+</Steps>
+
+<Note>
+  Si la posición del usuario pertenece a una unidad de RRHH/Gente (`GENTE`, `RRHH`, `HUMANO`, `TALENTO`, `PERSONAS` en la unidad de negocio, o palabras clave como `GENTE`, `RRHH`, `SELECCION`, `PLANILLA`, etc. en la posición), **no se aplica filtro de área** y se muestran todos los empleados de la sede y unidad.
+</Note>
+
+## Diferencias con la lista completa de empleados
+
+| Característica | Mi Equipo | Lista de Empleados |
+|---|---|---|
+| Formato | Tarjetas | Tabla |
+| Alcance de sedes | Solo sede principal | Sede principal + sedes adicionales |
+| Filtros manuales | Solo búsqueda por nombre/DNI | Sede, unidad, área, tipo y búsqueda |
+| Acciones de gestión | Solo ver perfil | Ver, editar, dar de baja, eliminar |
+| Exportar a Excel | No | Sí (para `canManage`) |
+| Importar desde Excel | No | Sí (para `canManage`) |
+
+## Búsqueda
+
+El buscador filtra por nombre completo (case-insensitive) o DNI dentro del conjunto ya acotado por sede, unidad y área. La barra de búsqueda muestra el conteo `N de M colaboradores en tu unidad`.
+
+## Jerarquía y asignación de supervisor
+
+Mi Equipo es una vista de consulta. La gestión de la jerarquía —asignar un supervisor a un grupo de empleados— se realiza desde una sección dedicada que utiliza las funciones `assignSupervisorBulk` y `getEmployeesWithSupervisor` del servicio `employees.js`:
+
+```js
+// Asignación masiva de supervisor
+assignSupervisorBulk(supervisorId, employeeIds)
+// RPC: assign_supervisor_bulk
+
+// Consulta de empleados con su supervisor actual
+getEmployeesWithSupervisor()
+// RPC: get_employees_hierarchy_data
+```
+
+La información de supervisor (`supervisor_id`, `supervisor_name`) se expone en el perfil del empleado enriquecido pero no se muestra directamente en las tarjetas de Mi Equipo.

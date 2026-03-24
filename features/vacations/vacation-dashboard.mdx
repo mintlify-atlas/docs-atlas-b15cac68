@@ -1,0 +1,147 @@
+---
+title: Vacation dashboard
+description: Monitor vacation balances across your organization, apply filters, view per-employee calendars, and approve or reject requests from a single screen.
+---
+
+The **Monitor de Vacaciones** (Vacation Dashboard) is the main operational view for managing employee vacation balances. It displays a table of employees with their earned days, consumed days, and remaining balance, along with a traffic-light status indicator. From this view you can open a per-employee vacation kardex or calendar, and apply filters to scope the data to a sede, business unit, or search term.
+
+## What the dashboard shows
+
+The top of the page shows four KPI cards:
+
+| Card | Description |
+|---|---|
+| **Total** | Total employees currently visible after all filters |
+| **Críticos** | Employees with `status = 'danger'` — more than 30 days of accumulated balance |
+| **Por Vencer** | Employees with `status = 'warning'` — between 15 and 30 days of balance |
+| **Al Día** | Employees with `status = 'safe'` |
+
+The employee table contains the following columns:
+
+- **Empleado** — full name
+- **Sede / Cargo** — sede and job position
+- **Unidad de Negocio** — business unit
+- **Ingreso** — entry date and years of service
+- **Ganados** — earned vacation days (`Math.trunc(earned_days)`)
+- **Consumidos** — total consumed days (`legacy_taken + app_taken`, truncated)
+- **Saldo** — remaining balance, highlighted red when negative
+- **Estado** — traffic-light badge (Crítico, Por Vencer, Al Día)
+- **Acción** — calendar icon and "Ver Detalle" button
+
+## Filters
+
+The filter bar provides four controls:
+
+<Tabs>
+  <Tab title="Search">
+    Free-text search by employee name or DNI. The query is only sent to the server when the search term is longer than 2 characters; shorter values are treated as empty.
+  </Tab>
+  <Tab title="Sede">
+    Dropdown populated from `getSedes()`. Selecting a sede loads the available business units for that sede from the organization structure.
+
+    Disabled (locked) for regular employees and Jefe de Ventas. Shows a "Restringido a" label when locked.
+  </Tab>
+  <Tab title="Unidad de Negocio">
+    Dropdown populated dynamically based on the selected sede. Disabled until a sede is selected.
+
+    Locked for regular employees and Jefe de Ventas.
+  </Tab>
+  <Tab title="Estado">
+    Filters the table client-side by the employee's vacation status:
+    - **Todos** — show all
+    - **Al Día** — `status = 'safe'`
+    - **Alerta (+15 días)** — `status = 'warning'`
+    - **Crítico (+30 días)** — `status = 'danger'`
+  </Tab>
+</Tabs>
+
+A **Limpiar Filtros** button appears when any filter is active. Clicking it resets all filters to their role-appropriate defaults and removes the persisted filter state from `localStorage`.
+
+### Filter persistence via localStorage
+
+Filter state is automatically saved to `localStorage` under the key `vacation_dashboard_filters` every time a filter changes:
+
+```javascript
+localStorage.setItem('vacation_dashboard_filters', JSON.stringify({
+  userId: user?.id,
+  filters: { sede, businessUnit, search, status },
+  timestamp: Date.now()
+}))
+```
+
+On page load, saved filters are restored only if the stored `userId` matches the current user. This means filter state is per-user and does not carry over when a different user logs in.
+
+<Note>
+  Persisted filters are only applied for global admins. Users with restricted access always have their sede and business unit locked to their own values regardless of what is stored.
+</Note>
+
+## Employee vacation balance table
+
+Data for the table is loaded by calling the `get_vacation_overview` Supabase RPC with three optional parameters:
+
+```javascript
+await supabase.rpc('get_vacation_overview', {
+  p_sede: sede || null,
+  p_search: search || null,
+  p_business_unit: businessUnit || null
+})
+```
+
+For non-admin users, an additional client-side filter is applied after the query:
+
+- Regular employees: results are filtered in memory to match their exact `sede` and `business_unit`.
+- Local bosses and Jefe de Ventas: an `allowedIds` set is built by querying `employees` filtered by the user's sede, business unit, and area, then only records whose `employee_id` is in that set are kept.
+- National bosses: the `allowedIds` set is built using the `get_employees_by_user_area` RPC.
+
+### Vacation kardex modal
+
+Clicking **Ver Detalle** opens a modal showing the full balance breakdown for that employee:
+
+- Earned days with the formula `(Antigüedad / 360) * 30`
+- Historical consumption (from the Excel migration — `legacy_taken`)
+- App consumption (from approved requests — `app_taken`)
+- The full balance equation with actual numbers
+
+## How to approve or reject a vacation request
+
+Approval and rejection of individual requests is handled from the [Requests List](/features/requests/requests-list) page, not from the dashboard. The dashboard is read-only with respect to request status.
+
+## VacationCalendar component integration
+
+Clicking the calendar icon in the actions column opens a modal containing the `VacationCalendar` component for that employee:
+
+```jsx
+<VacationCalendar employeeId={calendarEmployee.employee_id} />
+```
+
+The component fetches all `VACACIONES` requests for that employee (excluding rejected ones) and renders a monthly calendar where:
+
+- Upcoming approved vacation days are highlighted in **emerald green**
+- Past vacation days appear in **light emerald with strikethrough**
+- All other days are neutral
+
+Three summary counters are shown above the calendar:
+
+| Counter | Description |
+|---|---|
+| Solicitados | Total calendar days across all vacation requests |
+| Consumidos | Days that have already passed |
+| Por Gozar | Upcoming days (from today forward) |
+
+The calendar supports month navigation using previous/next buttons.
+
+## Role-scoped views
+
+The data loaded and the filter controls available depend on the user's role:
+
+| Role flag | Sede filter | BU filter | Data scope |
+|---|---|---|---|
+| `isGlobalAdmin` | Free | Free (per sede) | All employees |
+| `isNationalBoss` | Free | Free | Their area across all sedes |
+| `isLocalBoss` | Locked to own sede | Free | Their area in their sede(s) |
+| `isJefeDeVentas` | Locked to own sede | Locked to own BU | Their sede + BU |
+| Regular employee | Locked | Locked | Own sede + BU only |
+
+<Warning>
+  If a user attempts to change the sede filter when their role restricts it, the change is silently rejected and a console warning is logged. The UI shows the filter as disabled to prevent this.
+</Warning>

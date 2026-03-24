@@ -1,0 +1,169 @@
+---
+title: Organization structure
+description: Set up sedes, business units, and their relationships before onboarding employees in Gestión Gente.
+---
+
+Gestión Gente organizes your company into three levels:
+
+```
+Sede (branch / location)
+└── Business unit
+    └── Area → Job positions → Employees
+```
+
+You must configure sedes and business units before onboarding employees, because employees are assigned to a sede and optionally to a business unit at the time of registration.
+
+## Sedes
+
+A **sede** is a physical branch or location of your company. Each sede has a name and an optional address. Sedes support soft delete: calling `deleteSede` sets `is_active: false` rather than removing the row.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Display name of the branch. |
+| `address` | string | Optional physical address. |
+| `is_active` | boolean | Whether the sede is currently active. |
+
+### Service functions
+
+```javascript
+import {
+  getSedes,
+  createSede,
+  updateSede,
+  deleteSede,
+} from '../services/organization'
+
+// Fetch all sedes ordered by name
+const { data: sedes } = await getSedes()
+
+// Create a sede
+const { data, error } = await createSede('LIMA NORTE', 'Av. Túpac Amaru 1234')
+
+// Update name or address
+const { data, error } = await updateSede(sedeId, { address: 'Av. Nueva 500' })
+
+// Soft-delete (sets is_active = false)
+const { data, error } = await deleteSede(sedeId)
+```
+
+## Business units
+
+A **business unit** is a division within your organization (e.g. RETAIL, LOGÍSTICA, OPERACIONES). Business units are not inherently tied to a single sede — the same unit can exist across multiple sedes via the `org_structure` table. Like sedes, business units support soft delete.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Display name of the unit. |
+| `is_active` | boolean | Whether the unit is currently active. |
+
+### Service functions
+
+```javascript
+import {
+  getBusinessUnits,
+  createBusinessUnit,
+  updateBusinessUnit,
+  deleteBusinessUnit,
+} from '../services/organization'
+
+// Fetch all business units ordered by name
+const { data: units } = await getBusinessUnits()
+
+// Create a business unit
+const { data, error } = await createBusinessUnit('RETAIL')
+
+// Update
+const { data, error } = await updateBusinessUnit(unitId, { name: 'RETAIL & ECOMMERCE' })
+
+// Soft-delete
+const { data, error } = await deleteBusinessUnit(unitId)
+```
+
+## Organization structure — linking sedes and business units
+
+The `org_structure` table records which business units operate within each sede. A record is **active** when `is_active: true` and `valid_to` is `null`.
+
+### Service functions
+
+```javascript
+import {
+  getOrganizationStructure,
+  assignUnitToSede,
+  removeUnitFromSede,
+} from '../services/organization'
+
+// Fetch all active sede–unit relationships
+const { data } = await getOrganizationStructure()
+// Each row: { id, valid_from, valid_to, is_active, sedes: { id, name }, business_units: { id, name } }
+
+// Link a business unit to a sede
+const { data, error } = await assignUnitToSede(sedeId, unitId)
+
+// Remove the link (sets valid_to = yesterday, is_active = false)
+const { error } = await removeUnitFromSede(structureId)
+```
+
+<Note>
+`removeUnitFromSede` performs a soft delete by closing the validity period (`valid_to = yesterday`) rather than deleting the row. This preserves historical reporting.
+</Note>
+
+## Areas and job positions
+
+Areas group job positions within the system. Areas are managed from the **Gestión de Áreas y Cargos** page.
+
+```javascript
+import { getAreas, createArea, deleteArea, updatePositionArea } from '../services/areas'
+
+// Fetch all areas ordered by name
+const { data: areas } = await getAreas()
+
+// Create an area (name is stored in uppercase)
+const { data, error } = await createArea('marketing')
+// stored as 'MARKETING'
+
+// Delete an area (positions in that area become unassigned)
+const { error } = await deleteArea(areaId)
+
+// Move a job position to an area (or pass null to unassign)
+const { data, error } = await updatePositionArea(positionId, areaId)
+```
+
+<Warning>
+Deleting an area does not delete its job positions. Positions in a deleted area become unassigned and must be reassigned manually.
+</Warning>
+
+## Setup order
+
+Follow this order when configuring a new company or adding a new location:
+
+<Steps>
+  <Step title="Create sedes">
+    Go to **Estructura Organizacional → Sedes (Maestro)** and create every branch location with its name and address.
+  </Step>
+  <Step title="Create business units">
+    Go to **Estructura Organizacional → Unidades (Maestro)** and create each business division (e.g. RETAIL, OPERACIONES).
+  </Step>
+  <Step title="Link units to sedes">
+    Go to **Estructura Organizacional → Mapa de Estructura**. For each sede, click **+** and assign the business units that operate there.
+  </Step>
+  <Step title="Create areas">
+    Go to **Gestión de Áreas y Cargos** and create functional areas (e.g. MARKETING, LOGÍSTICA). Area names are stored in uppercase.
+  </Step>
+  <Step title="Assign job positions to areas">
+    On the same page, drag job positions from the **Sin Asignar** column into their corresponding area, or use the **Asignar** button for bulk assignment.
+  </Step>
+  <Step title="Create roles">
+    Go to **Permisos** and create a role for each job position. Enable `web_access` or `mobile_access` as needed and configure module permissions.
+  </Step>
+  <Step title="Onboard employees">
+    With sedes, units, areas, positions, and roles in place, you can now register employees and assign them to the correct sede, business unit, and role.
+  </Step>
+</Steps>
+
+## Structure overview
+
+The **Mapa de Estructura** tab on the Organization Structure page displays a card for each sede showing its assigned business units. From each card you can:
+
+- Add a new business unit to the sede using the **+** button.
+- Remove an existing unit assignment using the **×** button on the unit row.
+
+Only active, unassigned business units are shown in the assignment dropdown for a given sede.

@@ -1,0 +1,82 @@
+---
+title: Manual attendance registration
+description: How supervisors and HR staff manually register an attendance record on behalf of an employee.
+---
+
+The **Registro Manual de Asistencia** page (`ManualAttendance`) lets authorised users create an attendance record for any employee on their team when the record was not captured automatically — for example, when a biometric device was offline or an employee forgot to check in.
+
+## Who can access this page
+
+Access is determined by the `getTeamAttendance` service call made on page load, which calls the `get_team_attendance` RPC using the current user's `employee_id` as the supervisor ID. Only users who are recognised as supervisors in the database have a team returned. If the RPC returns an empty list, no employees appear in the selector.
+
+Typical roles that have access:
+
+- Supervisors, coordinators, and jefes de área
+- HR analysts and HR chiefs
+- Administrators (`ADMIN`, `SUPER ADMIN`)
+
+<Warning>
+  This page does not have a client-side role check. Access is implicitly controlled by the `get_team_attendance` RPC: users who are not supervisors will see an empty employee list and cannot submit a record.
+</Warning>
+
+## Submitting a manual record
+
+<Steps>
+  <Step title="Open the page">
+    Navigate to **Registro Manual de Asistencia**. The page loads the list of employees in your team from the `get_team_attendance` RPC.
+  </Step>
+  <Step title="Select an employee">
+    Choose the employee from the **Empleado** dropdown. Each option shows the employee's name and position.
+  </Step>
+  <Step title="Set the date">
+    Use the **Fecha** date picker. The field defaults to today and does not allow future dates (`max` is set to today's ISO date).
+  </Step>
+  <Step title="Enter check-in and check-out times">
+    - **Hora de Entrada** is required. It defaults to `08:00`.
+    - **Hora de Salida** is optional. It defaults to `17:00` but can be cleared.
+  </Step>
+  <Step title="Choose a record type">
+    Select one of the available record types from the **Tipo de Registro** dropdown.
+  </Step>
+  <Step title="Add optional notes">
+    The **Notas** textarea accepts free-text comments. This field is optional.
+  </Step>
+  <Step title="Submit">
+    Click **Registrar Asistencia**. The button shows a spinner while the record is being saved. On success, the app navigates back to the home page and sends an in-app notification to the employee.
+  </Step>
+</Steps>
+
+## Available record types
+
+The **Tipo de Registro** dropdown offers these options:
+
+| Display label | `record_type` value sent to the API |
+|---|---|
+| Asistencia | `ASISTENCIA` |
+| Permiso | `PERMISO` |
+| Vacaciones | `VACACIONES` |
+| Licencia Médica | `LICENCIA` |
+
+<Note>
+  The default record type is `ASISTENCIA`. If you are registering leave or a medical rest, make sure to change the dropdown before submitting.
+</Note>
+
+## How the record is saved
+
+The form data is passed to `registerManualAttendance` in `src/services/attendance.js`, which calls the `register_manual_attendance` database RPC.
+
+```javascript
+await registerManualAttendance({
+  employeeId: formData.employeeId,
+  supervisorId: user.employee_id,  // logged-in user acts as supervisor
+  workDate: formData.workDate,
+  checkIn: `${formData.workDate}T${formData.checkIn}:00`,
+  checkOut: formData.checkOut
+    ? `${formData.workDate}T${formData.checkOut}:00`
+    : null,
+  recordType: formData.recordType,
+  notes: formData.notes || null
+})
+```
+
+After a successful save, the platform inserts an `INFO` notification into the `notifications` table for the employee, informing them that their attendance was registered manually and listing the record type and any notes provided.

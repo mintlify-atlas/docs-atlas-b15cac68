@@ -1,0 +1,99 @@
+---
+title: 'Organizational areas'
+description: 'How to create and manage organizational areas and assign job positions to them.'
+---
+
+Organizational areas group job positions into logical departments — for example, `LOGÍSTICA`, `VENTAS`, or `RECURSOS HUMANOS`. Areas sit below the business unit level in the organizational hierarchy:
+
+```text
+Organization
+└── Sede (branch office)
+    └── Business Unit
+        └── Area
+            └── Job Position
+                └── Employee
+```
+
+Areas are not stored directly on employee records. An employee's area is resolved at query time by looking up the area assigned to their job position (`job_positions.area_id → areas.id`).
+
+## How areas affect the platform
+
+- **Report filtering** — the Sede, Business Unit, and Área filters in the Reports Center filter employee data using this position-to-area mapping.
+- **Employee visibility** — managers (jefes) who have a sede restriction see only employees within their data scope. Area filters are applied on top of this to further narrow results.
+- **Area name in exports** — Excel reports include an `Área` column populated from the `job_positions → areas` join.
+
+## The Areas management page
+
+Navigate to **Configuración → Áreas y Cargos**. The page uses a Kanban-style board:
+
+- The leftmost column (**Sin Asignar**) lists all positions that have no area assigned.
+- Each subsequent column represents one area and shows its assigned positions.
+- Each position card shows the position name and its employee count.
+
+## Creating an area
+
+<Steps>
+  <Step title="Type the area name">
+    Enter the new area name in the input field at the top-right of the page (for example, `MARKETING`).
+  </Step>
+  <Step title="Click Crear Área">
+    The new area column appears immediately on the board. Names are stored in uppercase automatically.
+  </Step>
+</Steps>
+
+<Note>
+Area names are stored in uppercase via the `createArea` service, which calls `.toUpperCase()` before inserting.
+</Note>
+
+## Assigning positions to an area
+
+There are two ways to assign positions:
+
+<Tabs>
+  <Tab title="Drag and drop">
+    Drag any position card from one column and drop it onto the target area column. The assignment is saved automatically. If the drop fails, the card reverts to its original column.
+  </Tab>
+  <Tab title="Bulk assign modal">
+    Hover over an area column header to reveal the **+** button. Clicking it opens a modal where you can select multiple positions via checkboxes and assign them all at once.
+  </Tab>
+  <Tab title="Move button">
+    Click the arrows icon on any position card to open a destination picker. Select the target area (or "Sin Asignar") to move the position.
+  </Tab>
+</Tabs>
+
+All three methods call `updatePositionArea(positionId, areaId)` which updates `job_positions.area_id`.
+
+## Removing a position from an area
+
+Drag the position card to the **Sin Asignar** column, or use the move button and select **Sin Asignar**.
+
+## Deleting an area
+
+Hover over the area column header and click the trash icon. You will be asked to confirm. On deletion:
+
+- The area record is removed from the `areas` table.
+- Positions assigned to that area have their `area_id` set to `null` in the local UI state immediately (they move to **Sin Asignar**).
+
+<Warning>
+Deleting an area that still has assigned positions will leave those positions without an area. Employees holding those positions will show `Sin Área` in reports until their position is reassigned.
+</Warning>
+
+## Service functions
+
+```javascript
+import { getAreas, createArea, deleteArea, updatePositionArea } from '../services/areas'
+
+// Fetch all areas ordered by name
+const { data, error } = await getAreas()
+// Returns: [{ id, name, ...rest }]
+
+// Create a new area (name is uppercased automatically)
+await createArea('logística') // stored as 'LOGÍSTICA'
+
+// Delete an area by ID
+await deleteArea(areaId)
+
+// Assign (or reassign) a position to an area
+// Pass null as areaId to unassign
+await updatePositionArea(positionId, areaId)
+```

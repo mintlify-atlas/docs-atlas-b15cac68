@@ -1,0 +1,150 @@
+---
+title: 'Work schedules'
+description: 'How to create and manage work schedules, assign them to employees, and understand their relationship to attendance and overtime.'
+---
+
+Work schedules define the expected check-in time, check-out time, working days, and tolerance window for a group of employees. The attendance system uses the assigned schedule to determine whether an employee is on time or late.
+
+## Schedule fields
+
+| Field | Description |
+|---|---|
+| Name | Descriptive name (e.g., `Horario Operativo Lima`) |
+| Shift | `MAÑANA`, `TARDE`, or `NOCHE` (optional) |
+| Schedule type | `REGULAR`, `FERIADO`, or `DOMINGO` |
+| Work days | Days of the week the schedule applies to (numeric: 1 = Monday, 7 = Sunday) |
+| Sede | Optional sede restriction |
+| Business unit | Optional business unit restriction |
+| Position | Optional position restriction |
+| Area | Optional area restriction |
+| Check-in time | Expected entry time (`HH:MM`) |
+| Check-out time | Expected exit time (`HH:MM`) |
+| Tolerance minutes | Grace period in minutes before marking an employee as late |
+| Bonus start / end | Early-arrival bonus window (applicable to OPL business units only) |
+| Is active | Whether the schedule is available for assignment |
+
+## How schedules relate to attendance
+
+When an attendance record is processed, the system compares the employee's actual check-in time against the schedule's `check_in_time` plus `tolerance_minutes`. If the employee clocks in after that window, `is_late` is set to `true` on the attendance record.
+
+For overtime calculation, the system compares the actual check-out time against `check_out_time`. Only employees in qualifying positions generate overtime records:
+
+<Note>
+Overtime (horas extras) is calculated only for employees with the following positions: **AUXILIAR DE ALMACÉN**, **MONTACARGUISTA**, **CONFERENTE**, and **COMPAGINADOR**. All other positions do not generate overtime regardless of check-out time.
+</Note>
+
+## The Schedules management page
+
+Navigate to **Configuración → Gestión de Horarios**. The page has three tabs:
+
+<Tabs>
+  <Tab title="Horarios">
+    Lists all schedules in a table. You can filter by sede, business unit, or search by name, position, or area. Admins and Jefes de Gente can create, edit, and delete schedules from this tab.
+  </Tab>
+  <Tab title="Asignaciones">
+    Shows current active assignments (where `valid_to` is null) and allows assigning a schedule to one or more employees.
+  </Tab>
+  <Tab title="Horas Extras">
+    Shows attendance records for qualifying positions within a date range, with calculated overtime minutes and a summary of total overtime hours and affected employees.
+  </Tab>
+</Tabs>
+
+## Creating a schedule
+
+<Steps>
+  <Step title="Click Nuevo Horario">
+    Available only to users with admin access or the Jefe de Gente position.
+  </Step>
+  <Step title="Fill in the required fields">
+    At minimum, provide a name, check-in time, and check-out time.
+  </Step>
+  <Step title="Configure optional restrictions">
+    Set sede, business unit, position, and area fields to associate the schedule with a specific organizational scope. Leave them blank for a global schedule.
+  </Step>
+  <Step title="Set work days">
+    Select which days of the week this schedule applies to. The default is Monday through Saturday.
+  </Step>
+  <Step title="Save">
+    Click **Guardar**. The new schedule appears in the table immediately.
+  </Step>
+</Steps>
+
+## Editing a schedule
+
+Click the pencil icon on any schedule row. The same modal opens pre-filled with the existing values. Save to apply changes.
+
+## Deleting a schedule
+
+Click the trash icon on the schedule row. A confirmation dialog appears before deletion.
+
+<Warning>
+Deleting a schedule does not automatically remove existing employee assignments. Assigned employees will show "sin horario" in overtime and attendance reports until a new schedule is assigned.
+</Warning>
+
+## Assigning a schedule to employees
+
+<Steps>
+  <Step title="Go to the Asignaciones tab">
+    Switch to the **Asignaciones** tab on the Schedules management page.
+  </Step>
+  <Step title="Filter and select employees">
+    Use the search field, sede, and business unit filters to find employees. Check the boxes next to the employees you want to assign.
+  </Step>
+  <Step title="Select a schedule">
+    Choose the schedule from the **Horario a asignar** dropdown. Only active schedules are listed.
+  </Step>
+  <Step title="Add optional notes">
+    Enter any notes in the Observaciones field.
+  </Step>
+  <Step title="Click Asignar Horario">
+    The assignment is saved. Existing assignments for overlapping work days are automatically closed (their `valid_to` is set to today's date).
+  </Step>
+</Steps>
+
+### How assignment replacement works
+
+When a new schedule is assigned:
+
+- **Regular schedules** close any existing assignment that shares at least one work day with the new schedule.
+- **Special schedules** (`FERIADO` or `DOMINGO`) only close previous assignments of the same type. Regular schedules are not affected.
+- Special schedule assignments are valid only for the `target_date` of the schedule (`valid_from = valid_to = target_date`).
+
+## Removing an assignment
+
+On the Asignaciones tab, click the **X** button on an assignment row. This sets `valid_to` to today's date on the `employee_schedule_assignments` record.
+
+## Service functions
+
+```javascript
+import {
+  getSchedules, createSchedule, updateSchedule, deleteSchedule,
+  getScheduleAssignments, assignScheduleToEmployees, removeScheduleAssignment,
+  getAttendanceForOvertime, calcOvertimeMinutes, formatOvertimeHours
+} from '../services/schedules'
+
+// Fetch all schedules
+const { data } = await getSchedules()
+
+// Create a schedule
+await createSchedule({
+  name: 'Horario Operativo Lima',
+  check_in_time: '07:00:00',
+  check_out_time: '17:00:00',
+  tolerance_minutes: 5,
+  work_days: [1, 2, 3, 4, 5, 6],
+  schedule_type: 'REGULAR',
+  is_active: true,
+})
+
+// Assign schedule to employees
+await assignScheduleToEmployees(
+  [employeeId1, employeeId2],
+  scheduleId,
+  assignedByEmployeeId,
+  'Optional notes'
+)
+
+// Calculate overtime minutes
+const minutes = calcOvertimeMinutes(checkOutISOString, '17:00:00')
+console.log(formatOvertimeHours(minutes)) // "0h 30m"
+```

@@ -1,0 +1,212 @@
+---
+title: Roles and permissions
+description: Configure roles, module-level permissions, and sede access for every user in Gestión Gente.
+---
+
+Roles control what each employee can see and do in Gestión Gente. Every employee is assigned exactly one role. A role defines:
+
+- Whether the employee can log in via the **web** platform (`web_access`)
+- Whether the employee can use the **mobile app** (`mobile_access`)
+- Which **system modules** the employee can read, write, or delete
+- Which **sedes** (branches) the employee can access beyond their primary sede
+
+## Role fields
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Unique role name. Typically matches a job position (e.g. `ANALISTA`, `JEFE DE OPERACIONES`). |
+| `web_access` | boolean | Grants access to the web application. |
+| `mobile_access` | boolean | Grants access to the mobile application. |
+
+<Note>
+A role with both `web_access` and `mobile_access` set to `false` cannot log in to either platform.
+</Note>
+
+## System modules
+
+The `SYSTEM_MODULES` constant defines every module that can be permissioned. Permissions are stored per role in the `role_modules` table.
+
+| Key | Label |
+|---|---|
+| `dashboard` | Dashboard / Inicio |
+| `employees` | Empleados |
+| `attendance` | Asistencias |
+| `schedules` | Horarios |
+| `lifecycle` | Gestión Altas/Bajas |
+| `requests` | Solicitudes |
+| `calendar` | Calendario |
+| `vacations` | Vacaciones |
+| `reports` | Reportes |
+| `departments` | Dptos / Sedes |
+| `settings` | Configuración |
+| `config` | Cargos y Áreas |
+
+## Module permissions
+
+Each role–module combination has three independent permission flags:
+
+| Flag | Meaning |
+|---|---|
+| `can_read` | The role can view this module. |
+| `can_write` | The role can create and edit records in this module. |
+| `can_delete` | The role can delete records in this module. |
+
+<Note>
+Enabling `can_write` or `can_delete` automatically enables `can_read`. Disabling `can_read` disables all three flags and removes the `role_modules` row entirely.
+</Note>
+
+When no `role_modules` row exists for a given role–module pair, the module is completely hidden from that role.
+
+### Reading module permissions
+
+Use `getModulesByRole` to retrieve the current permission set for a role:
+
+```javascript
+import { getModulesByRole } from '../services/roleModules'
+
+const { data, error } = await getModulesByRole('ANALISTA')
+// data: [{ module_key, can_read, can_write, can_delete }, ...]
+```
+
+### Setting module permissions
+
+Use `upsertRoleModule` to create or update a single module permission. If a row already exists for the role and module it is updated; otherwise a new row is inserted.
+
+```javascript
+import { upsertRoleModule } from '../services/roleModules'
+
+const { data, error } = await upsertRoleModule('ANALISTA', 'reports', {
+  can_read: true,
+  can_write: false,
+  can_delete: false,
+})
+```
+
+### Removing module permissions
+
+Use `deleteRoleModule` to remove all access to a module for a role:
+
+```javascript
+import { deleteRoleModule } from '../services/roleModules'
+
+const { error } = await deleteRoleModule('ANALISTA', 'reports')
+```
+
+## Creating a new role
+
+Roles are created from the **Permisos** page. The role name must match an existing job position (`job_positions` table) that does not already have a corresponding role.
+
+<Steps>
+  <Step title="Open the create dialog">
+    Click the **+** button at the top of the role list. The system loads available positions and filters out any that already have a matching role.
+  </Step>
+  <Step title="Select a position">
+    Choose a position from the dropdown. The role name will be set to the position name.
+  </Step>
+  <Step title="Confirm">
+    Click **Crear**. The system calls `createRole` with `web_access: false` and `mobile_access: false`, then immediately calls `assignEmployeesByPosition` to bulk-assign all employees whose `position` field matches the new role name.
+
+    ```javascript
+    import { createRole, assignEmployeesByPosition } from '../services/roles'
+
+    const { data, error } = await createRole({
+      name: 'ANALISTA',
+      web_access: false,
+      mobile_access: false,
+    })
+
+    if (data) {
+      await assignEmployeesByPosition('ANALISTA', data.id)
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+New roles are created with all access disabled. You must explicitly enable `web_access` or `mobile_access` and configure module permissions before users can log in.
+</Note>
+
+## Assigning roles to employees
+
+You can assign a role to an individual employee by searching for them in the **Usuarios** tab of any role and clicking the result. You can also reassign an already-assigned employee to a different role using the inline dropdown.
+
+```javascript
+import { assignRoleToUser, searchUsers } from '../services/roles'
+
+// Find an employee
+const { data: results } = await searchUsers('María')
+
+// Assign the first result to a role
+const { error } = await assignRoleToUser(results[0].id, roleId)
+```
+
+`assignEmployeesByPosition` performs a bulk assignment for all employees whose `position` matches a given string (case-insensitive):
+
+```javascript
+import { assignEmployeesByPosition } from '../services/roles'
+
+const { data, error } = await assignEmployeesByPosition('SUPERVISOR DE TURNO', roleId)
+```
+
+## Role categories for automatic supervisor suggestions
+
+The hierarchy suggestion engine in Gestión Gente recognises the following keywords in position names to identify potential supervisors. These are used as a fallback when no direct supervisor has been assigned.
+
+| Keyword | Priority score |
+|---|---|
+| `gerente` | 4 |
+| `jefe` | 3 |
+| `coordinador` | 2 |
+| `supervisor` | 1 |
+| `analista` | — (not a supervisor candidate) |
+
+<Note>
+These categories are matched using a normalised, accent-insensitive substring search on the employee's `position` field. A role named `JEFE DE LOGÍSTICA` scores 3 as a base and receives a further +5 boost if the filtered area name appears in the position title.
+</Note>
+
+## Allowed sedes per user
+
+Each employee has a **primary sede** set on their employee record. You can grant additional sede access without changing their primary sede using the `user_allowed_sedes` table.
+
+### Adding a sede
+
+```javascript
+import { addAllowedSede } from '../services/roleModules'
+
+// Grant access to a sede, optionally scoped to a business unit
+const { data, error } = await addAllowedSede(
+  employeeId,     // UUID of the employee
+  'LIMA NORTE',   // sede_name
+  'RETAIL',       // business_unit_name (pass null for all units)
+  grantedByUserId // employee_id of the granting user (audit)
+)
+```
+
+### Removing a sede
+
+```javascript
+import { removeAllowedSede } from '../services/roleModules'
+
+// id is the row ID from user_allowed_sedes
+const { error } = await removeAllowedSede(id)
+```
+
+### Fetching allowed sedes
+
+```javascript
+import { getAllowedSedes, getAllowedSedesBatch } from '../services/roleModules'
+
+// For a single employee
+const { data } = await getAllowedSedes(employeeId)
+
+// For multiple employees at once
+const { data } = await getAllowedSedesBatch([id1, id2, id3])
+```
+
+<Note>
+An employee's primary sede is always active and cannot be removed from the **Sedes** tab. Only manually granted sedes (origin: **Manual**) can be removed.
+</Note>
+
+<Warning>
+Employees with no `sede` value on their record have global access — they are not restricted to any sede. The **Sedes** tab displays these users with a "Acceso Global" badge and the add/remove controls are hidden for them.
+</Warning>

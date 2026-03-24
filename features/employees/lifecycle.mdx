@@ -1,0 +1,104 @@
+---
+title: Altas y Bajas (Ciclo de Vida)
+description: Control de ingresos y ceses de personal por periodo, con soporte para reactivación y exportación.
+---
+
+La página **Gestión de Altas y Bajas** (`EmployeeLifecycle`) centraliza el registro histórico de ingresos y ceses de personal. Permite consultar qué empleados entraron o salieron durante un mes y año determinados, y ejecutar acciones sobre esos registros.
+
+## Pestañas principales
+
+La página tiene dos pestañas que conmutan el conjunto de datos mostrado:
+
+<Tabs>
+  <Tab title="Altas (Ingresos)">
+    Muestra empleados cuya `entry_date` cae dentro del mes y año seleccionados. Los registros se ordenan por `entry_date` descendente.
+
+    Cada fila muestra el nombre, DNI, sede, unidad de negocio y la fecha de ingreso. La columna de acciones etiqueta al empleado como **Nuevo Ingreso**.
+  </Tab>
+  <Tab title="Bajas (Ceses)">
+    Muestra empleados con `is_active = false` cuya `termination_date` cae dentro del mes y año seleccionados. Los registros se ordenan por `termination_date` descendente.
+
+    Además de los datos básicos, muestra:
+    - **Tipo de baja** — extraído del campo `termination_type` o del prefijo `[TIPO]` en `termination_reason`.
+    - **Detalle** — el texto libre del motivo.
+    - **Documentos adjuntos** — si `termination_document_url` contiene URLs (como array JSON o URL simple), se muestran como enlaces descargables.
+    - Botón **Reactivar** para restaurar al empleado.
+  </Tab>
+</Tabs>
+
+## Filtros de periodo
+
+Usa el selector de **Mes** y **Año** para acotar el periodo. El rango de años disponibles abarca los últimos 5 años desde el año actual. El campo de búsqueda permite filtrar los resultados por nombre o DNI dentro del periodo ya seleccionado.
+
+## Dar de baja a un empleado
+
+La baja se inicia desde la tabla principal de empleados (`EmployeesList`) pulsando el ícono de baja. Esto abre el componente `TerminationModal`.
+
+<Steps>
+  <Step title="Seleccionar el tipo de baja">
+    Elige uno de los tipos disponibles. Están agrupados en dos categorías:
+
+    **Forzados:**
+    - Término de Contrato (`TERMINO_CONTRATO`)
+    - Periodo de Prueba (`PERIODO_PRUEBA`)
+    - Mutuo Disenso (`MUTUO_DISENSO`)
+
+    **No Forzados:**
+    - Renuncia (`RENUNCIA`)
+    - Abandono de Trabajo (`ABANDONO_TRABAJO`)
+    - No Renovación (`NO_RENOVACION`)
+  </Step>
+  <Step title="Completar los detalles">
+    Para los tipos `RENUNCIA`, `TERMINO_CONTRATO`, `PERIODO_PRUEBA` y `MUTUO_DISENSO` se solicita la **Fecha de Cese**. Para `RENUNCIA` también es posible adjuntar hasta 3 archivos de documentación (PDF, imágenes, documentos Word).
+  </Step>
+  <Step title="Confirmar la baja">
+    Al confirmar, el modal:
+    1. Sube los archivos adjuntos al bucket `documents/bajas/` en Supabase Storage (si los hay) y recopila sus URLs públicas.
+    2. Actualiza el registro del empleado con:
+       - `is_active = false`
+       - `termination_date` — fecha seleccionada (o fecha/hora actual para Abandono de Trabajo y No Renovación).
+       - `termination_reason` — cadena con formato `[TIPO] Descripción`.
+       - `termination_document_url` — array JSON de URLs o `null`.
+  </Step>
+</Steps>
+
+<Warning>
+  Al confirmar la baja, el empleado queda en estado `Inactivo`. Esto bloquea su acceso a la aplicación móvil y lo excluye de todas las listas de personal activo, registros de asistencia y estadísticas del dashboard.
+</Warning>
+
+## Reactivar a un empleado
+
+Desde la pestaña **Bajas**, el botón **Reactivar** abre un modal de confirmación. Al confirmar, se actualizan los siguientes campos del empleado:
+
+```js
+{
+  is_active: true,
+  termination_date: null,
+  termination_reason: null,
+  termination_document_url: null
+}
+```
+
+El empleado vuelve a aparecer en las listas de personal activo y recupera el acceso a la aplicación móvil.
+
+## Exportación a Excel
+
+El botón **Exportar** genera un archivo Excel con los datos visibles en la pestaña activa (considerando los filtros de búsqueda aplicados). Las columnas exportadas son:
+
+**Altas:** DNI, Nombre Completo, Cargo, Sede, Unidad, Fecha Ingreso.
+
+**Bajas:** DNI, Nombre Completo, Cargo, Sede, Unidad, Fecha Baja, Motivo Baja.
+
+El nombre del archivo tiene el formato `Reporte_altas_MM_YYYY.xlsx` o `Reporte_bajas_MM_YYYY.xlsx`.
+
+## Control de acceso
+
+El acceso a esta página está restringido por `ProtectedRoute` a usuarios de RRHH y Gerencia. A nivel de datos, la consulta aplica los siguientes filtros de seguridad:
+
+- **Administrador global** (incluye `ADM. CENTRAL` + unidad `ADMINISTRACIÓN`): ve registros de todas las sedes sin filtro.
+- **Analista de Gente no-global**: la consulta se filtra por `sede` y `business_unit` del perfil del usuario.
+- Los supervisores y coordinadores normales no tienen acceso a esta página.
+
+## Registro de auditoría
+
+Cada baja queda registrada con los campos `termination_date`, `termination_reason` y `termination_document_url` en el propio registro del empleado. El historial de cambios de posición (promociones, traslados) se guarda en la tabla `job_history` y es visible desde el modal de perfil del empleado.

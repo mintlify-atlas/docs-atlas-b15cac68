@@ -1,0 +1,186 @@
+---
+title: "Sedes Permitidas (user_allowed_sedes)"
+description: "Cómo extender la visibilidad de un gerente o jefe más allá de su sede principal asignándole sedes adicionales."
+---
+
+## ¿Qué es `user_allowed_sedes`?
+
+Por defecto, cada empleado solo puede ver datos de su propia sede (`employees.sede`) y unidad de negocio (`employees.business_unit`). La tabla `user_allowed_sedes` permite asignar **sedes adicionales** a usuarios individuales — independientemente de su sede principal — sin cambiar su registro en `employees`.
+
+Esto es útil para jefes regionales o supervisores que gestionan múltiples sucursales.
+
+### Estructura de la tabla
+
+```sql
+CREATE TABLE IF NOT EXISTS user_allowed_sedes (
+  id               UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id      UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  sede_name        TEXT NOT NULL,
+  business_unit_name TEXT,  -- NULL = todas las BU de esa sede
+  granted_by       UUID REFERENCES employees(id),
+  created_at       TIMESTAMPTZ DEFAULT now()
+);
+```
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `id` | `uuid` | Clave primaria |
+| `employee_id` | `uuid` | FK al empleado que recibe el acceso |
+| `sede_name` | `text` | Nombre de la sede adicional |
+| `business_unit_name` | `text` | Unidad de negocio específica. `NULL` = todas las BU de esa sede |
+| `granted_by` | `uuid` | FK al empleado que otorgó el acceso (auditoría) |
+| `created_at` | `timestamptz` | Fecha de asignación |
+
+<Note>
+  Un índice único funcional en `(employee_id, sede_name, COALESCE(business_unit_name, '__ALL__'))` previene asignaciones duplicadas incluso cuando `business_unit_name` es `NULL`.
+</Note>
+
+---
+
+## Agregar y eliminar sedes permitidas
+
+Usando las funciones de `src/services/roleModules.js`:
+
+<Tabs>
+  <Tab title="Agregar sede">
+    ```jsx
+    import { addAllowedSede } from '../services/roleModules'
+
+    // Dar acceso a una sede completa (todas las BU)
+    await addAllowedSede(
+      employeeId,      // UUID del empleado
+      'SEDE NORTE',    // Nombre exacto de la sede
+      null,            // business_unit_name: null = todas las BU
+      grantedByUserId  // UUID del usuario que otorga el acceso
+    )
+
+    // Dar acceso a una BU específica dentro de la sede
+    await addAllowedSede(
+      employeeId,
+      'SEDE NORTE',
+      'COMERCIAL',
+      grantedByUserId
+    )
+    ```
+  </Tab>
+  <Tab title="Consultar sedes de un empleado">
+    ```jsx
+    import { getAllowedSedes } from '../services/roleModules'
+
+    const { data, error } = await getAllowedSedes(employeeId)
+    // Devuelve: [{ id, employee_id, sede_name, business_unit_name, ... }]
+    ```
+  </Tab>
+  <Tab title="Consulta por lotes">
+    ```jsx
+    import { getAllowedSedesBatch } from '../services/roleModules'
+
+    // Útil para cargar permisos de múltiples empleados en una sola query
+    const { data } = await getAllowedSedesBatch([id1, id2, id3])
+    ```
+  </Tab>
+  <Tab title="Eliminar sede">
+    ```jsx
+    import { removeAllowedSede } from '../services/roleModules'
+
+    // id: el UUID de la fila en user_allowed_sedes (no el employee_id)
+    await removeAllowedSede(rowId)
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Efecto en cada funcionalidad
+
+<CardGroup cols={2}>
+  <Card title="Lista de empleados" icon="users">
+    Los empleados de las sedes adicionales aparecen junto a los de la sede principal. Un usuario con `sede_name = 'SEDE NORTE'` y `allowed_sedes = ['SEDE SUR']` verá empleados de ambas sedes.
+  </Card>
+  <Card title="Asistencias" icon="clock">
+    La función RPC `get_daily_attendance_report` incluye empleados de `user_allowed_sedes` en todas las ramas de JEFE, COORDINADOR y SUPERVISOR.
+  </Card>
+  <Card title="Dashboard stats" icon="chart-bar">
+    La función `get_dashboard_stats_local_boss` agrega totales de empleados, asistencias del día, solicitudes pendientes y tardanzas considerando sede principal + sedes manuales.
+  </Card>
+  <Card title="Vacaciones" icon="plane">
+    La función `get_allowed_employee_ids_local_boss` devuelve los IDs de todos los empleados gestionables, usada como whitelist en el dashboard de vacaciones.
+  </Card>
+</CardGroup>
+
+---
+
+## El RPC `get_employees_by_user_area`
+
+Esta función RPC devuelve el listado de empleados que el usuario tiene permitido ver, basado en su rol y sede.
+
+```sql
+CREATE FUNCTION public.get_employees_by_user_area()
+RETURNS TABLE(id uuid, full_name text, dni text, email text,
+              position text, sede text, business_unit text, ...)
+LANGUAGE plpgsql SECURITY DEFINER
+```
+
+La función obtiene el contexto del usuario autenticado (rol, cargo, sede, área, BU) y aplica las siguientes reglas:
+
+| Rol / Cargo | Empleados visibles |
+|---|---|
+| `ADMIN`, `SUPER ADMIN`, `GERENTE GENERAL`, `SISTEMAS` | Todos los activos |
+| `GERENTE` (cualquier gerente) | Todos los activos |
+| `JEFE DE GENTE`, `ANALISTA DE GENTE` | Todos los activos |
+| JEFE / COORDINADOR (ADM. CENTRAL con área) | Todos los de su área |
+| JEFE / COORDINADOR (regional con área) | Su sede + área; y sedes en `user_allowed_sedes` |
+| SUPERVISOR (con área) | Su sede + área; y sedes en `user_allowed_sedes` |
+| ANALISTA (no Gente) | Su sede + área o BU |
+
+<Warning>
+  `get_employees_by_user_area` fue la función original. Las funciones `get_allowed_employee_ids_local_boss` y `get_dashboard_stats_local_boss` fueron creadas para complementarla, ya que `get_employees_by_user_area` no tenía conocimiento de `user_allowed_sedes` en su implementación base.
+</Warning>
+
+---
+
+## Cómo funciona la lógica de sede + BU
+
+El campo `business_unit_name` en `user_allowed_sedes` es opcional:
+
+- Si es `NULL`: el usuario ve **todos los empleados** de esa sede, sin importar la BU.
+- Si tiene valor: el usuario solo ve empleados cuya `business_unit` coincida (comparación `ILIKE`).
+
+Ejemplo en SQL:
+
+```sql
+-- El usuario ve empleados de la sede manual si:
+EXISTS (
+  SELECT 1 FROM user_allowed_sedes uas
+  WHERE uas.employee_id = v_user_id
+  AND   uas.sede_name IS NOT NULL
+  AND   e.sede = uas.sede_name
+  AND   (uas.business_unit_name IS NULL
+         OR e.business_unit ILIKE uas.business_unit_name)
+)
+```
+
+---
+
+## Actualizaciones en tiempo real
+
+Cuando se modifica `user_allowed_sedes`, el contexto de autenticación recarga automáticamente el perfil del usuario afectado:
+
+```jsx
+.on('postgres_changes', {
+  event: '*',
+  schema: 'public',
+  table: 'user_allowed_sedes'
+}, (payload) => {
+  const changedEmpId = payload.new?.employee_id || payload.old?.employee_id
+  if (changedEmpId === user?.employee_id) {
+    fetchProfile(session.user)
+  }
+})
+```
+
+Para que esto funcione, la tabla debe estar en la publicación Realtime:
+
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE user_allowed_sedes;
+```

@@ -1,0 +1,116 @@
+---
+title: Hierarchy management
+description: Assign direct supervisors to employees and understand how reporting lines affect approvals and data scoping in Gestión Gente.
+---
+
+The **Gestión de Jerarquías** page lets administrators assign a direct supervisor (`supervisor_id`) to one or more employees at a time. This reporting line is used in two places:
+
+1. **Request approvals** — when an employee submits a request (e.g. vacation, absence), it is routed to their direct supervisor.
+2. **My Team view** — supervisors see only the employees who report directly to them.
+
+<CardGroup>
+  <Card title="Document approvals" icon="file-check">
+    An employee's supervisor is notified and must approve or reject submitted requests.
+  </Card>
+  <Card title="RBAC data scoping" icon="shield-check">
+    Data visible to a supervisor is scoped to their direct reports, keeping each manager's view clean and focused.
+  </Card>
+</CardGroup>
+
+## How hierarchy assignment works
+
+<Steps>
+  <Step title="Filter the employee list">
+    Use the filter bar to narrow down employees by **sede**, **unidad de negocio**, **área**, name, DNI, or position. You can also filter by whether an employee already has a supervisor.
+
+    When you select an area or sede, the system automatically suggests the most likely supervisor from the filtered set based on position keywords and contextual matching.
+  </Step>
+  <Step title="Select employees">
+    Click individual employee rows to select them, or use **Seleccionar Todos** to select the entire filtered result set. Selected employees are highlighted with a blue border.
+
+    Each row shows the employee's current supervisor (if any). Employees without a supervisor are flagged with a warning indicator.
+  </Step>
+  <Step title="Choose a supervisor">
+    In the right panel, search for the supervisor by name. The search list is pre-filtered to candidates with recognised leadership positions (jefe, gerente, coordinador, supervisor).
+
+    If the system detected a suggestion based on your current filters, it appears as a **Sugerencia Automática** card above the search input. You can accept it with one click.
+  </Step>
+  <Step title="Save the assignment">
+    Click **Guardar Asignación**. The system calls `assignSupervisorBulk` to update `supervisor_id` on all selected employee records simultaneously.
+
+    ```javascript
+    import { assignSupervisorBulk } from '../services/employees'
+
+    const { error } = await assignSupervisorBulk(
+      supervisorId,    // UUID of the supervisor
+      employeeIds      // array of employee UUIDs
+    )
+    ```
+
+    The page refreshes automatically after a successful save.
+  </Step>
+</Steps>
+
+<Warning>
+A supervisor cannot be assigned as a direct report of themselves. The UI validates this before saving and surfaces an error if any selected employee matches the chosen supervisor.
+</Warning>
+
+## Supervisor suggestion logic
+
+When you filter by area or sede, the system scans the employee list for leadership candidates and ranks them:
+
+<Tabs>
+  <Tab title="Ranking rules">
+    | Keyword in position | Base score |
+    |---|---|
+    | `gerente` | 4 |
+    | `jefe` | 3 |
+    | `coordinador` | 2 |
+    | `supervisor` | 1 |
+
+    A candidate receives a **+5 bonus** when the filtered area name appears inside their position title (e.g. position `JEFE DE LOGÍSTICA` when the area filter is `LOGÍSTICA`).
+
+    The candidate with the highest score is shown as the suggestion. No suggestion is shown if no candidate scores above 0.
+  </Tab>
+  <Tab title="Scope rules">
+    A candidate is only included if:
+
+    - Their `sede` matches the active sede filter (if set).
+    - Their `business_unit` matches the active business unit filter (if set).
+    - Their `area_name` matches the active area filter (if set), **or** their position contains `gerente general` (general managers are always visible).
+  </Tab>
+</Tabs>
+
+<Note>
+The suggestion is a convenience feature. You can always ignore it and search for any supervisor manually.
+</Note>
+
+## Impact on the "My Team" view
+
+Once a supervisor relationship is saved, the supervisor's **My Team** view is scoped to show only their direct reports. This scoping is driven by the `supervisor_id` foreign key on the `employees` table and is applied at the data layer, not just in the UI.
+
+This means:
+
+- A supervisor only sees attendance, requests, and schedule data for employees who report to them.
+- If an employee is reassigned to a different supervisor, they disappear from the original supervisor's view immediately.
+
+## Why hierarchy matters for RBAC
+
+Gestión Gente uses role-based access control (RBAC) to determine **what** a user can see (modules and actions), and the supervisor hierarchy to determine **whose data** they can see. These two mechanisms work independently:
+
+<CardGroup>
+  <Card title="Role permissions" icon="layout-grid">
+    Defined in `role_modules`. Controls which modules are visible and whether the user can read, write, or delete within them.
+  </Card>
+  <Card title="Hierarchy scoping" icon="users">
+    Defined by `supervisor_id`. Controls which employee records appear in lists, reports, and approval queues.
+  </Card>
+</CardGroup>
+
+<Note>
+An employee with `can_read` on the `employees` module but no direct reports will see an empty employee list — the module is accessible but the hierarchy scope returns zero records. Assign direct reports to give the supervisor meaningful access.
+</Note>
+
+## Identifying employees without a supervisor
+
+Use the **Tiene Supervisor** filter and select **No tiene (Pendiente)** to display all employees who have not yet been assigned a supervisor. Bulk-select them and assign a supervisor to complete the hierarchy setup.

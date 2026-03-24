@@ -1,0 +1,158 @@
+---
+title: 'Roles management'
+description: 'How to view roles, configure module permissions, assign users, and manage allowed sedes per user.'
+---
+
+The Roles Management page is the central interface for configuring access control. It controls which parts of the platform each user can access, whether they can use the web app and/or mobile app, and which sedes their account is permitted to view data for.
+
+## Page layout
+
+The page is split into two panels:
+
+- **Left panel** — a scrollable list of all roles. Each role card shows the role name and two toggle buttons: **Web** (web access) and **App** (mobile access).
+- **Right panel** — three tabs for the selected role: **Usuarios**, **Módulos**, and **Sedes**.
+
+## Viewing roles
+
+All roles from the `roles` table are loaded on page open and listed alphabetically in the left panel. Click any role to select it and view its details in the right panel.
+
+The **Web** and **App** badges on each role card indicate the current value of `roles.web_access` and `roles.mobile_access`. These toggle immediately when clicked — no save button is needed.
+
+## Creating a role
+
+<Steps>
+  <Step title="Click the + button">
+    Located in the top-right of the left panel.
+  </Step>
+  <Step title="Select a position">
+    The modal shows all job positions that do not already have a matching role. Select one from the dropdown.
+  </Step>
+  <Step title="Click Crear">
+    The role is created with `web_access: false` and `mobile_access: false`. Immediately after creation, `assignEmployeesByPosition` is called to update all employees whose `position` field matches the new role name, setting their `role_id` to the new role.
+  </Step>
+</Steps>
+
+<Note>
+Role names are derived from job position names. Each role corresponds to one position. The role name is used throughout the system to match permissions — for example, module permissions are stored with `role_name` as the lookup key.
+</Note>
+
+## Editing a role
+
+Web and mobile access flags can be toggled directly from the role card in the left panel. Changes are saved immediately via `updateRole`.
+
+Module permissions are managed in the **Módulos** tab (see below).
+
+## Configuring module permissions
+
+Select a role and click the **Módulos** tab. A matrix table lists every system module with three permission columns:
+
+| Column | Color | Meaning |
+|---|---|---|
+| Leer (Read) | Green | User can view the module |
+| Escribir (Write) | Blue | User can create and edit data |
+| Eliminar (Delete) | Red | User can delete data |
+
+The following modules are configurable:
+
+| Module key | Label |
+|---|---|
+| `dashboard` | Dashboard / Inicio |
+| `employees` | Empleados |
+| `attendance` | Asistencias |
+| `schedules` | Horarios |
+| `lifecycle` | Gestión Altas/Bajas |
+| `requests` | Solicitudes |
+| `calendar` | Calendario |
+| `vacations` | Vacaciones |
+| `reports` | Reportes |
+| `departments` | Dptos / Sedes |
+| `settings` | Configuración |
+| `config` | Cargos y Áreas |
+
+Click any cell to toggle that permission. The system enforces these rules automatically:
+
+- Disabling **Leer** also disables **Escribir** and **Eliminar**.
+- Enabling **Escribir** or **Eliminar** automatically enables **Leer**.
+
+When all three permissions for a module are disabled, the row is deleted from `role_modules`. Otherwise, the row is upserted.
+
+## Managing users in a role
+
+Select a role and click the **Usuarios** tab.
+
+- The tab shows all employees whose `role_id` matches the role, with a fallback to employees whose `role` or `position` text matches the role name.
+- To assign a new user, type in the search box (minimum 3 characters). Results appear in a dropdown. Click a result to assign that employee to the role.
+- To move a user to a different role, hover over their row and use the role selector that appears.
+
+## Managing allowed sedes per user
+
+Select a role and click the **Sedes** tab. This tab shows all users in the role and their sede access configuration.
+
+Each user has a **primary sede** (from their employee record) that is always active. Additional sedes can be granted manually:
+
+<Steps>
+  <Step title="Click Agregar Sede">
+    Next to the user's name. Not available for users with no sede set (global access).
+  </Step>
+  <Step title="Select a sede">
+    Choose from the dropdown. Optionally narrow access further by selecting a specific business unit within that sede.
+  </Step>
+  <Step title="Click Añadir">
+    Adds the sede to the staged list. You can stage multiple sedes before saving.
+  </Step>
+  <Step title="Click Guardar">
+    All staged sedes are saved at once to the `user_allowed_sedes` table.
+  </Step>
+</Steps>
+
+To remove an additional sede, hover over the row in the user's sede table and click the **X** icon.
+
+<Note>
+The primary sede is labeled **Principal** and cannot be removed from this page. Only manually granted sedes (labeled **Manual**) can be removed.
+</Note>
+
+<Warning>
+Users with no `sede` set on their employee record show a global access badge. These users can see data across all sedes and cannot have additional sedes added from this page.
+</Warning>
+
+## Service functions
+
+```javascript
+import {
+  getRoles, createRole, updateRole,
+  getUsersByRole, assignRoleToUser,
+  assignEmployeesByPosition, searchUsers
+} from '../services/roles'
+
+import {
+  getModulesByRole, upsertRoleModule, deleteRoleModule,
+  getAllowedSedes, getAllowedSedesBatch,
+  addAllowedSede, removeAllowedSede
+} from '../services/roleModules'
+
+// Fetch all roles
+const { data } = await getRoles()
+
+// Create a role and auto-assign matching employees
+const { data: newRole } = await createRole({
+  name: 'ANALISTA DE SISTEMAS',
+  web_access: false,
+  mobile_access: false
+})
+await assignEmployeesByPosition('ANALISTA DE SISTEMAS', newRole.id)
+
+// Update web/mobile access flags
+await updateRole(roleId, { web_access: true })
+
+// Manage module permissions
+await upsertRoleModule('ANALISTA DE SISTEMAS', 'reports', {
+  can_read: true,
+  can_write: false,
+  can_delete: false
+})
+await deleteRoleModule('ANALISTA DE SISTEMAS', 'reports')
+
+// Manage allowed sedes
+await addAllowedSede(employeeId, 'TRUJILLO', 'OPL', grantedByEmployeeId)
+await removeAllowedSede(allowedSedeRowId)
+```

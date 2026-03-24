@@ -1,0 +1,177 @@
+---
+title: "Configuración de Supabase"
+description: "Guía paso a paso para conectar un proyecto Supabase nuevo a la plataforma Gestión Gente: tablas requeridas, variables de entorno, Super Admin y Realtime."
+---
+
+## Requisitos previos
+
+- Cuenta en [supabase.com](https://supabase.com)
+- Node.js instalado para ejecutar la app
+- Supabase CLI instalado (para aplicar migraciones localmente)
+
+---
+
+## Variables de entorno
+
+Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
+
+```bash
+VITE_SUPABASE_URL=https://<tu-proyecto>.supabase.co
+VITE_SUPABASE_ANON_KEY=<tu-anon-key>
+```
+
+<Warning>
+  Nunca incluyas la `service role key` en el frontend ni en el archivo `.env` que se sube al repositorio. Esa clave tiene acceso completo a la base de datos y omite RLS.
+</Warning>
+
+Encontrarás estos valores en tu proyecto Supabase en: **Settings → API → Project URL** y **Anon Key**.
+
+---
+
+## Tablas requeridas
+
+La plataforma requiere las siguientes tablas en el esquema `public`:
+
+<CardGroup cols={2}>
+  <Card title="employees" icon="users">
+    Registro central de empleados. Incluye `role_id` (FK a `roles`), `is_active`, `sede`, `business_unit`, `position`, `role` (legado) y `employee_type`.
+  </Card>
+  <Card title="roles" icon="shield">
+    Roles disponibles con flags `web_access` y `mobile_access`.
+  </Card>
+  <Card title="role_modules" icon="puzzle-piece">
+    Permisos granulares por rol y módulo (`can_read`, `can_write`, `can_delete`).
+  </Card>
+  <Card title="user_allowed_sedes" icon="building">
+    Sedes adicionales asignadas a usuarios individuales.
+  </Card>
+  <Card title="attendance" icon="clock">
+    Registros de asistencia, tardanzas y ausencias.
+  </Card>
+  <Card title="vacation_requests" icon="plane">
+    Solicitudes de vacaciones y permisos con flujo de aprobación.
+  </Card>
+</CardGroup>
+
+Además se utilizan tablas de soporte como `areas`, `job_positions`, `departments`, `sedes`, `business_units`, `locations`, `schedules` y otras.
+
+---
+
+## Aplicar el esquema base
+
+<Steps>
+  <Step title="Crear el proyecto en Supabase">
+    Desde el panel de Supabase, crea un nuevo proyecto y espera a que inicialice.
+  </Step>
+  <Step title="Aplicar el esquema completo">
+    En el SQL Editor del panel de Supabase, ejecuta el archivo:
+
+    ```
+    supabase/migrations/20260308000000_esquema_completo.sql
+    ```
+
+    Este archivo es un dump completo de PostgreSQL (formato `pg_dump`, codificación UTF-16 LE). Si usas la CLI de Supabase, convírtelo primero a UTF-8:
+
+    ```bash
+    iconv -f UTF-16LE -t UTF-8 supabase/migrations/20260308000000_esquema_completo.sql \
+      -o esquema_utf8.sql
+    ```
+
+    Luego impórtalo con `psql` o el SQL Editor del panel.
+  </Step>
+  <Step title="Aplicar las migraciones adicionales">
+    Ejecuta las migraciones numeradas en orden (ver [Migraciones](/admin/migrations)):
+
+    ```bash
+    # Con Supabase CLI (requiere enlace al proyecto remoto)
+    supabase db push
+
+    # O manualmente en el SQL Editor, en orden:
+    # 20260318000001_role_rename_cascade.sql
+    # 20260318000002_rls_write_protection.sql
+    # 20260318000003_super_admin_flag.sql
+    # 20260318000004_dashboard_stats_local_boss.sql
+    # 20260318000005_allowed_ids_local_boss.sql
+    # 20260318000006_attendance_rpc_allowed_sedes.sql
+    ```
+  </Step>
+  <Step title="Crear la tabla user_allowed_sedes">
+    Si no se incluyó en el esquema base, ejecuta:
+
+    ```bash
+    # Archivo independiente incluido en el repositorio
+    CREATE_USER_ALLOWED_SEDES.sql
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Configurar el usuario Super Admin
+
+El Super Admin se identifica por el flag `is_super_admin` en `app_metadata` de Supabase Auth. Solo puede setearse con la `service role key`.
+
+<Steps>
+  <Step title="Crear el usuario en Supabase Auth">
+    En el panel de Supabase: **Authentication → Users → Invite user** o mediante la API de Admin.
+  </Step>
+  <Step title="Setear el flag is_super_admin">
+    Ejecuta esta sentencia en el SQL Editor con permisos de `service role`:
+
+    ```sql
+    UPDATE auth.users
+    SET raw_app_meta_data = raw_app_meta_data || '{"is_super_admin": true}'::jsonb
+    WHERE LOWER(TRIM(email)) = 'admin@tuempresa.com';
+    ```
+  </Step>
+  <Step title="Verificar">
+    ```sql
+    SELECT email, raw_app_meta_data->'is_super_admin' as is_super_admin
+    FROM auth.users
+    WHERE LOWER(email) = 'admin@tuempresa.com';
+    ```
+
+    Debe devolver `true`.
+  </Step>
+</Steps>
+
+<Warning>
+  La tabla `auth.users` solo es accesible desde el SQL Editor del panel de Supabase o usando la `service role key`. Nunca ejecutes sentencias sobre `auth.users` desde el cliente.
+</Warning>
+
+---
+
+## Habilitar Realtime
+
+La plataforma escucha cambios en tiempo real en las tablas `role_modules` y `user_allowed_sedes` para actualizar permisos automáticamente sin requerir que el usuario recargue la página.
+
+Ejecuta en el SQL Editor:
+
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE role_modules;
+ALTER PUBLICATION supabase_realtime ADD TABLE user_allowed_sedes;
+```
+
+También puedes habilitarlo desde el panel de Supabase: **Database → Replication → supabase_realtime** y activar las tablas correspondientes.
+
+<Tip>
+  Si ves errores en consola como `Error: channel already exists`, es posible que Realtime ya esté habilitado. Verifica en **Database → Replication** antes de ejecutar las sentencias.
+</Tip>
+
+---
+
+## Verificación final
+
+```bash
+# Instalar dependencias
+npm install
+
+# Iniciar la app en desarrollo
+npm run dev
+```
+
+Navega a la URL local, inicia sesión con el usuario Super Admin y verifica que:
+
+- El dashboard carga sin errores.
+- El panel de Configuración muestra todas las opciones de admin.
+- Los permisos de roles se pueden editar desde la interfaz.

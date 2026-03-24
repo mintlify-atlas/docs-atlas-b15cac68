@@ -1,0 +1,208 @@
+---
+title: 'Exporting reports'
+description: 'How to export each report type, available filters, service functions, and Excel field reference.'
+---
+
+Each report card in the Reports Center has a **Descargar Excel** button. Clicking it triggers a data fetch, applies any active filters, and downloads an `.xlsx` file immediately.
+
+## How to export
+
+<Steps>
+  <Step title="Open the Reports Center">
+    Navigate to the Reports Center from the sidebar. You must have `can_read` on the `reports` module.
+  </Step>
+  <Step title="Apply shared filters (if available)">
+    If your role allows free filtering, use the Sede, Unidad de Negocio, and Área dropdowns at the top of the page to narrow the scope.
+  </Step>
+  <Step title="Configure per-report filters">
+    Set any date-specific filters shown inside the report card (date range, month, or year).
+  </Step>
+  <Step title="Click Descargar Excel">
+    The button shows "Generando..." while data is being fetched. The file downloads automatically when ready.
+  </Step>
+</Steps>
+
+<Note>
+If no records match the selected filters, a warning toast appears and no file is downloaded.
+</Note>
+
+---
+
+## Maestro de Empleados
+
+**Service function:** `getEmployeesReport(sede, businessUnit)`
+
+Fetches all employees from the `employees` table, then joins `job_positions` to resolve each employee's area name. Business unit and area filtering is applied in memory after the API response.
+
+**Available filters:** Sede, Unidad de Negocio, Área
+
+**File name pattern:** `Maestro_Empleados_{SEDE}_{YYYY-MM-DD}.xlsx`
+
+**Sheet name:** `Empleados`
+
+<AccordionGroup>
+  <Accordion title="Excel fields">
+    | Column | Source field |
+    |---|---|
+    | DNI | `dni` |
+    | Nombre Completo | `full_name` |
+    | Cargo | `position` |
+    | Área | `area_name.area_name` (resolved via `job_positions → areas`) |
+    | Sede | `sede` |
+    | Unidad Negocio | `business_unit` |
+    | Fecha Ingreso | `entry_date` |
+    | Tipo | `employee_type` |
+    | Email | `email` |
+    | Celular | `phone` |
+    | Dirección | `address` |
+    | Distrito | `district` |
+    | Estado Civil | `civil_status` |
+    | Hijos | `children_count` |
+    | AFP/ONP | `pension_system` |
+    | CUSPP | `cuspp` |
+    | Banco | `bank_name` |
+    | Cuenta | `bank_account` |
+    | CCI | `cci_account` |
+    | Estado | `ACTIVO` if `is_active`, else `INACTIVO` |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Reporte de Asistencias
+
+**Service function:** `getAttendanceReport(startDate, endDate, sede)`
+
+Fetches attendance records from the `attendance` table joined to `employees` via `attendance_employee_id_fkey`. The query range is expanded by one day on each end to guard against timezone edge cases; the results are then filtered in memory to the exact requested dates. Employees without attendance records on a given day appear as implicit absences (`AUSENCIA`).
+
+**Available filters:** Sede, Unidad de Negocio, Área, date range (Desde / Hasta)
+
+**File name pattern:** `Asistencias_{SEDE}_{start}_al_{end}.xlsx`
+
+**Sheet name:** `Asistencias`
+
+<AccordionGroup>
+  <Accordion title="Excel fields">
+    | Column | Description |
+    |---|---|
+    | Fecha | Work date formatted as `DD/MM/YYYY` |
+    | DNI | Employee DNI |
+    | Empleado | Employee full name |
+    | Sede | Employee sede |
+    | Ingreso | Check-in time (Peru time, `HH:MM AM/PM`) or `-` |
+    | Salida | Check-out time (Peru time, `HH:MM AM/PM`) or `-` |
+    | Estado | `PUNTUAL`, `TARDANZA`, `AUSENCIA`, `DESCANSO MÉDICO`, `LICENCIA`, or `VACACIONES` |
+    | Tipo | Raw `record_type` value |
+    | AUSENTISMO | `AUSENTISMO` if absent or unjustified; `ASISTENCIA` otherwise |
+    | Validado | `SÍ` if `is_validated`, else `NO` |
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+The attendance report performs a cross-join of all dates in the range against all employees in scope. For large date ranges or many employees, generation may take several seconds.
+</Tip>
+
+---
+
+## Nuevos Ingresos
+
+**Service function:** `getNewHiresReport(year, month, sede)`
+
+Calls the `get_monthly_dashboard_metrics` Supabase RPC with the selected year, month, and sede. The list of new hires is extracted from `data.new_hires.list`. Area names are enriched via a secondary `job_positions → areas` join.
+
+**Available filters:** Sede, Unidad de Negocio, Área, month and year selectors
+
+**File name pattern:** `Nuevos_Ingresos_{SEDE}_{month}_{year}.xlsx`
+
+**Sheet name:** `Ingresos`
+
+<AccordionGroup>
+  <Accordion title="Excel fields">
+    | Column | Source field |
+    |---|---|
+    | DNI | `dni` |
+    | Nombre Completo | `full_name` |
+    | Cargo | `position` |
+    | Área | `area_name` (resolved via `job_positions → areas`) |
+    | Sede | `sede` |
+    | Unidad Negocio | `business_unit` |
+    | Fecha Ingreso | `entry_date` |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Saldos de Vacaciones
+
+**Service function:** `getVacationBalanceReport(sede)`
+
+Calls the `get_vacation_overview` Supabase RPC. Area names are enriched via a secondary `job_positions → areas` join. Years of service are calculated client-side from `entry_date` at export time.
+
+**Available filters:** Sede, Unidad de Negocio, Área
+
+**File name pattern:** `Saldos_Vacaciones_{SEDE}_{YYYY-MM-DD}.xlsx`
+
+**Sheet name:** `Vacaciones`
+
+<AccordionGroup>
+  <Accordion title="Excel fields">
+    | Column | Source field / calculation |
+    |---|---|
+    | DNI | `dni` |
+    | Empleado | `full_name` |
+    | Cargo | `position` |
+    | Área | `area_name` |
+    | Sede | `sede` |
+    | Unidad Negocio | `business_unit` |
+    | Fecha Ingreso | `entry_date` |
+    | Años Servicio | Calculated from `entry_date` to today (full years) |
+    | Días Ganados | `Math.trunc(earned_days)` |
+    | Días Gozados | `Math.trunc(legacy_taken + app_taken)` |
+    | Saldo Actual | `Math.trunc(balance)` |
+    | Estado | `CRÍTICO` (danger), `ADVERTENCIA` (warning), or `NORMAL` (safe/success) |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Reporte de Bajas
+
+**Service function:** `getTerminationsReport(startDate, endDate, sede, businessUnit)`
+
+Fetches inactive employees (`is_active = false`) from the `employees` table where `termination_date` falls within the selected range. Area names are enriched via a secondary `job_positions → areas` join. Business unit and area filtering is applied in memory.
+
+**Available filters:** Sede, Unidad de Negocio, Área, date range (Desde / Hasta)
+
+**File name pattern:** `Reporte_Bajas_{SEDE}_{start}_al_{end}.xlsx`
+
+**Sheet name:** `Bajas`
+
+<AccordionGroup>
+  <Accordion title="Excel fields">
+    | Column | Source field |
+    |---|---|
+    | DNI | `dni` |
+    | Nombre Completo | `full_name` |
+    | Cargo | `position` |
+    | Área | `area_name` (resolved via `job_positions → areas`) |
+    | Sede | `sede` |
+    | Unidad Negocio | `business_unit` |
+    | Fecha Ingreso | `entry_date` |
+    | Fecha Baja | `termination_date` (date portion only) |
+    | Motivo | `termination_reason` |
+    | Documento(s) | `termination_document_url` |
+    | Email | `email` |
+    | Celular | `phone` |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Using the downloaded Excel file
+
+All exported files open directly in Microsoft Excel, LibreOffice Calc, or Google Sheets.
+
+- Each file contains a single worksheet.
+- Column headers match the field names listed in this page.
+- Column widths are set to a minimum of 15 characters. Resize columns as needed.
+- Dates are exported as plain text strings (`YYYY-MM-DD` or `DD/MM/YYYY` depending on the report). Convert to date format in your spreadsheet application if you need date calculations.

@@ -1,0 +1,112 @@
+---
+title: Vacation management overview
+description: How Gestión Gente tracks vacation entitlements, balances, attendance records, and who can manage vacations at each role level.
+---
+
+Vacation management in Gestión Gente covers the full lifecycle of employee time-off: calculating earned days based on seniority, tracking historical and in-app consumption, generating the official Papeleta de Vacaciones when a request is approved, and enforcing role-based visibility so each user only sees the data they are authorized to access.
+
+## What vacation management covers
+
+<CardGroup cols={2}>
+  <Card title="Balance tracking" icon="calculator">
+    Each employee has a running vacation balance calculated from their entry date, historical days loaded via Excel, and days consumed through approved requests in the app.
+  </Card>
+  <Card title="Request workflow" icon="file-text">
+    Employees submit vacation requests. Authorized users approve or reject them. Approval triggers automatic generation and storage of the Papeleta de Vacaciones PDF.
+  </Card>
+  <Card title="Vacation voucher" icon="printer">
+    The Papeleta de Vacaciones is an official document generated on approval. It records the employee, dates, and the signing authority (immediate supervisor).
+  </Card>
+  <Card title="Role-scoped access" icon="shield">
+    What a user can see — which employees, which sedes — is determined by their role and position. Access is enforced both in the UI and at the data-query level.
+  </Card>
+</CardGroup>
+
+## Vacation balance calculation
+
+The balance for each employee is derived from three values:
+
+| Component | Source | Description |
+|---|---|---|
+| **Días Ganados** (earned days) | Calculated | `(seniority in days / 360) × 30` |
+| **Consumo Histórico** (legacy taken) | Excel bulk upload | Days taken before the app was introduced, loaded via the bulk-upload page |
+| **Consumo App** (app taken) | Approved requests | Days from vacation requests with status `APROBADO`, stored in `vacation_requests` |
+
+The balance formula is:
+
+```
+SALDO = GANADOS - (HISTÓRICO + APP)
+```
+
+All three values are displayed in the vacation kardex modal on the dashboard.
+
+<Note>
+  The balance is truncated to whole days (`Math.trunc`) for display purposes. A negative balance indicates the employee has consumed more days than they have earned.
+</Note>
+
+## Relationship between vacation requests and attendance records
+
+Vacation requests are stored in the `vacation_requests` table. Each request has:
+
+- `start_date` and `end_date` — the period being requested
+- `total_days` — the number of days in the request
+- `status` — one of `PENDIENTE`, `APROBADO`, `COMPLETADO`, `RECHAZADO`, or `CANCELADO`
+- `request_type` — set to `VACACIONES` for vacation requests
+- `validated_by` and `validated_at` — the approver and timestamp, written on status change
+- `pdf_url` — the Supabase Storage URL of the generated Papeleta PDF, written on approval
+
+Only non-rejected requests (`status != 'RECHAZADA'`) count toward the app-consumption figure shown in the balance.
+
+## Vacation voucher (Papeleta de Vacaciones)
+
+The Papeleta de Vacaciones is the official printed record of an approved vacation request. It is generated automatically when a request is approved from the Requests List page.
+
+**What triggers generation:** clicking the approve button on a pending request that has a `signed_file_url` (the employee's signed copy).
+
+**What it contains:**
+
+- Employer data (company name, RUC, address)
+- Employee name, DNI, position, and sede
+- Vacation period (start date, end date)
+- Emission date
+- Signing authority — the employee's immediate supervisor, resolved via the `get_signing_authority` RPC
+
+**Two copies:** The document is rendered as two identical blocks separated by a dashed cut line — one copy for the company, one for the employee.
+
+**Output formats:** The PDF can be printed directly (`window.print()`) or downloaded as a file using `html2pdf.js`.
+
+<Warning>
+  The approve button is disabled if the request does not yet have a `signed_file_url`. The employee must upload their signed copy before approval is possible.
+</Warning>
+
+## Role-scoped access
+
+Access to vacation data is scoped by the authenticated user's `role`, `position`, `sede`, and `business_unit`. The following roles are evaluated in `VacationDashboard`:
+
+<AccordionGroup>
+  <Accordion title="Global admin (isGlobalAdmin)">
+    Sees all employees across all sedes and business units with no restrictions.
+
+    Qualifies as global admin if any of these conditions is true:
+    - `role` is `ADMIN`, `SUPER ADMIN`, or `JEFE_RRHH`
+    - `position` includes `JEFE DE GENTE` or `JEFE COMERCIAL`
+    - `permissions['*']` is set
+    - Is an `ANALISTA DE GENTE` in `ADM. CENTRAL` under the `ADMINISTRACIÓN` business unit
+  </Accordion>
+  <Accordion title="Jefe de Ventas (isJefeDeVentas)">
+    Has strict access limited to their own sede and business unit. Cannot change the sede or business unit filters. The filter dropdowns are locked and display a "Restringido a" label.
+  </Accordion>
+  <Accordion title="Local boss (isLocalBoss)">
+    Any non-global boss (role or position includes `JEFE`, `GERENTE`, `COORDINADOR`, or `SUPERVISOR`) who is not in ADM. CENTRAL. Sees employees in their sede and area. The sede filter is fixed; the business unit filter is free.
+  </Accordion>
+  <Accordion title="National boss (isNationalBoss)">
+    A boss or coordinator seated in ADM. CENTRAL. Can see their area across all sedes. Neither the sede nor the business unit filter is fixed by default.
+  </Accordion>
+  <Accordion title="Regular employee">
+    Sees only employees in their own sede and business unit. Both filters are locked.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Filter state is persisted in `localStorage` under the key `vacation_dashboard_filters`. Persisted filters are keyed to the user's ID, so switching users clears the saved state.
+</Tip>

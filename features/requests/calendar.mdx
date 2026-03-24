@@ -1,0 +1,109 @@
+---
+title: Calendar requests
+description: A monthly calendar view of all active employee requests, filterable by request type, with day-level detail and Excel export.
+---
+
+The **Calendario de Solicitudes** page visualizes employee requests on a monthly calendar grid. Each day cell shows the names of employees with an active request on that date, color-coded by request type. Cancelled and rejected requests are never shown.
+
+## What the calendar shows
+
+The calendar displays all requests whose date range covers the currently viewed month — meaning a request that started in a previous month and ends in the current month will still appear on the relevant days.
+
+Requests are color-coded by category:
+
+| Category | Color |
+|---|---|
+| VACACIONES | Emerald |
+| SALUD | Rose |
+| PERSONAL | Amber |
+| OTROS | Blue |
+
+Each day cell shows up to 2 request entries. If more requests fall on a day, a **+N más** indicator is shown. Hovering over it displays a summary tooltip grouped by category.
+
+Days in the past render their request entries with a grayscale treatment to visually distinguish historical data from upcoming absences.
+
+Today's date is highlighted with a filled blue circle.
+
+<Note>
+  Requests with status `CANCELADO` or `RECHAZADO` are filtered out before the calendar renders. Only `PENDIENTE`, `APROBADO`, and `COMPLETADO` requests appear.
+</Note>
+
+## How approved requests appear on the calendar
+
+All non-cancelled, non-rejected requests are shown regardless of whether they are pending or approved. This means a pending request already appears on the calendar before it is approved. The status of each request is visible in the day detail modal.
+
+A request spans every calendar day between its `start_date` and `end_date` inclusive. The matching logic is:
+
+```javascript
+req.start_date <= dateStr && req.end_date >= dateStr
+```
+
+where `dateStr` is formatted as `YYYY-MM-DD`.
+
+## Navigating by month
+
+Use the **chevron buttons** in the top-right navigation bar to move forward or backward one month at a time. The current month and year are displayed between the buttons.
+
+The calendar always starts on Sunday (the first column is `Dom`).
+
+## Filtering by request type
+
+The left sidebar contains four checkboxes — one per request category (VACACIONES, SALUD, PERSONAL, OTROS). Unchecking a category hides all requests of that type from the calendar grid and from the day detail modal. The filter is applied client-side from the already-loaded data.
+
+The sidebar also shows a **Resumen del Mes** counter reflecting the total number of visible requests after the type filters are applied.
+
+<Tip>
+  The type filter does not reload data from the server. Toggle categories freely to focus on a specific kind of absence without any network requests.
+</Tip>
+
+## Day detail modal
+
+Clicking any day cell that has at least one request opens a modal showing all requests for that day. Each entry displays:
+
+- Employee profile picture (if available) or name initial
+- Full name and job position
+- Request category and status badge
+- Notes (if any)
+- Total days and the start–end date range
+
+## Exporting to Excel
+
+The **Exportar** button in the top-right exports the currently visible requests (after type filters) to an Excel file. The file is named `Reporte_Solicitudes_YYYY-MM.xlsx` and includes the following columns:
+
+| Column | Source field |
+|---|---|
+| Empleado | `employees.full_name` |
+| DNI | `employees.dni` |
+| Cargo | `employees.position` |
+| Sede | `employees.sede` |
+| Tipo Solicitud | `request_type` |
+| Fecha Inicio | `start_date` |
+| Fecha Fin | `end_date` |
+| Días Solicitados | `total_days` |
+| Estado | `status` |
+| Notas | `notes` |
+
+## Filtering by sede or employee (role-based)
+
+The calendar does not expose a manual sede or employee filter in the UI. Data scoping is enforced automatically based on the authenticated user's role:
+
+**Global admins** (role `ADMIN`, `SUPER ADMIN`, `JEFE_RRHH`, `permissions['*']`, or the Analista de Gente Part Time exception) see all non-cancelled, non-rejected requests.
+
+**All other users** have the loaded requests filtered by:
+
+1. `employees.sede === user.sede` — only requests from employees at the user's sede
+2. `employees.business_unit === user.business_unit` — only requests from employees in the user's business unit
+
+Both filters are applied in sequence on the client after the initial data load.
+
+## Relationship to the vacation dashboard
+
+The Calendar Requests view and the [Vacation Dashboard](/features/vacations/vacation-dashboard) use the same underlying `vacation_requests` table and the same `getRequests()` service function. The key differences are:
+
+| Aspect | Calendar | Vacation Dashboard |
+|---|---|---|
+| **Focus** | Timeline visualization of all request types | Balance and status per employee |
+| **Data source** | `getRequests()` — all request types | `getVacationOverview()` RPC — vacation balances |
+| **Cancelled/rejected** | Hidden | Shown in the balance calculation (rejected excluded from balance) |
+| **Per-employee calendar** | Not available | Available via the `VacationCalendar` component in a modal |
+| **Approval actions** | Not available | Not available (handled in Requests List) |

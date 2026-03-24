@@ -1,0 +1,232 @@
+---
+title: "Políticas de Row Level Security (RLS)"
+description: "Qué son las políticas RLS, cuáles están activas en Gestión Gente, cómo interactúan con el RBAC del frontend y buenas prácticas de seguridad."
+---
+
+## ¿Qué es Row Level Security?
+
+Row Level Security (RLS) es una característica de PostgreSQL que permite definir políticas a nivel de fila que determinan qué registros puede ver o modificar cada usuario. En Supabase, RLS actúa como una capa de defensa en la base de datos, independiente del frontend.
+
+<Warning>
+  **Nunca deshabilites RLS en tablas sensibles en producción.** Desactivar RLS expone todos los registros de esa tabla a cualquier usuario autenticado que haga una llamada directa a la API de Supabase, sin pasar por los controles de la aplicación.
+</Warning>
+
+---
+
+## Defensa en profundidad
+
+Gestión Gente implementa seguridad en dos capas independientes:
+
+| Capa | Dónde vive | Qué controla |
+|---|---|---|
+| **RBAC frontend** | `AuthContext.jsx` + `role_modules` | Qué módulos y acciones se muestran en la UI |
+| **RLS backend** | PostgreSQL (Supabase) | Qué filas puede leer o modificar cada usuario a nivel de base de datos |
+
+Ambas capas son necesarias. El RBAC del frontend puede ser omitido por un usuario que llame directamente a la API REST de Supabase. RLS garantiza que incluso en ese caso, el usuario solo pueda acceder a los datos que le corresponden.
+
+---
+
+## Políticas clave
+
+### Tablas `roles` y `role_modules`
+
+Definidas en `20260318000002_rls_write_protection.sql`:
+
+<Tabs>
+  <Tab title="roles">
+    ```sql
+    -- Lectura: todos los autenticados
+    -- (necesario para verificar web_access en el flujo de login)
+    CREATE POLICY "roles_select"
+      ON roles FOR SELECT TO authenticated
+      USING (true);
+
+    -- Escritura: solo admins
+    CREATE POLICY "roles_insert"
+      ON roles FOR INSERT TO authenticated
+      WITH CHECK (is_app_admin());
+
+    CREATE POLICY "roles_update"
+      ON roles FOR UPDATE TO authenticated
+      USING (is_app_admin())
+      WITH CHECK (is_app_admin());
+
+    CREATE POLICY "roles_delete"
+      ON roles FOR DELETE TO authenticated
+      USING (is_app_admin());
+    ```
+  </Tab>
+  <Tab title="role_modules">
+    ```sql
+    -- Lectura: todos los autenticados
+    -- (necesario para cargar permisos de módulos en el login)
+    CREATE POLICY "role_modules_select"
+      ON role_modules FOR SELECT TO authenticated
+      USING (true);
+
+    -- Escritura: solo admins
+    CREATE POLICY "role_modules_insert"
+      ON role_modules FOR INSERT TO authenticated
+      WITH CHECK (is_app_admin());
+
+    CREATE POLICY "role_modules_update"
+      ON role_modules FOR UPDATE TO authenticated
+      USING (is_app_admin())
+      WITH CHECK (is_app_admin());
+
+    CREATE POLICY "role_modules_delete"
+      ON role_modules FOR DELETE TO authenticated
+      USING (is_app_admin());
+    ```
+  </Tab>
+  <Tab title="user_allowed_sedes">
+    ```sql
+    -- Política permisiva (control a nivel de aplicación)
+    CREATE POLICY "Allow all for authenticated"
+      ON user_allowed_sedes
+      FOR ALL TO authenticated
+      USING (true)
+      WITH CHECK (true);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### La función `is_app_admin()`
+
+Esta función se usa como guardiana en todas las políticas de escritura. Usa `SECURITY DEFINER` para ejecutarse con los permisos del creador de la función, evitando recursión RLS al consultar `employees` desde una política de `roles` o `role_modules`.
+
+```sql
+CREATE OR REPLACE FUNCTION is_app_admin()
+RETURNS BOOLEAN AS $$
+DECLARE
+  v_role     TEXT;
+  v_position TEXT;
+BEGIN
+  -- 1. Chequear app_metadata del JWT
+  --    (sin query extra, cubre usuarios sin registro en employees)
+  IF (auth.jwt()->'app_metadata'->>'is_super_admin')::boolean = TRUE THEN
+    RETURN TRUE;
+  END IF;
+
+  -- 2. Chequear rol/cargo en employees
+  SELECT
+    UPPER(TRIM(COALESCE(role, ''))),
+    UPPER(TRIM(COALESCE(position, '')))
+  INTO v_role, v_position
+  FROM employees
+  WHERE LOWER(TRIM(email)) = LOWER(TRIM(auth.email()))
+  LIMIT 1;
+
+  RETURN (
+    v_role    IN ('ADMIN', 'SUPER ADMIN', 'ADMINISTRADOR GENERAL') OR
+    v_position LIKE '%SISTEMAS%'                                    OR
+    v_position LIKE '%JEFE DE GENTE%'
+  );
+EXCEPTION
+  WHEN OTHERS THEN RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+```
+
+<Note>
+  El uso de `SECURITY DEFINER` en `is_app_admin()` es intencional. Sin él, la consulta a `employees` dentro de una política RLS de `roles` causaría recursión infinita si `employees` también tiene RLS activo.
+</Note>
+
+---
+
+### RLS en el RPC `get_daily_attendance_report`
+
+La función `get_daily_attendance_report` es `SECURITY DEFINER` y aplica su propia lógica de acceso internamente, determinando si el usuario es admin global o si debe restringirse a su sede y área:
+
+```sql
+CREATE OR REPLACE FUNCTION public.get_daily_attendance_report(...)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE SECURITY DEFINER
+SET search_path TO 'public'
+```
+
+La función determina `v_is_admin` basándose en rol, cargo y sede del usuario autenticado. Si `v_is_admin = FALSE`, aplica filtros por sede, BU y área, incluyendo `user_allowed_sedes`.
+
+---
+
+### Trigger de aprobaciones: `tr_check_approval_perms`
+
+Definido en `configure_supervisor_access.sql`. Se ejecuta `BEFORE UPDATE` en `vacation_requests` y valida que supervisores y coordinadores solo aprueben solicitudes de su propia sede y unidad de negocio:
+
+```sql
+CREATE OR REPLACE FUNCTION public.check_vacation_approval_permissions()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+```
+
+Reglas del trigger:
+
+| Condición | Resultado |
+|---|---|
+| Estado cambia de `PENDIENTE` a `APROBADO`/`RECHAZADO` | Se activa la validación |
+| El aprobador es Super Admin (`admin@pauser.com`) | Se permite sin restricciones |
+| El aprobador tiene rol ADMIN/SUPER ADMIN/GERENTE GENERAL | Se permite |
+| El aprobador es JEFE DE GENTE o ANALISTA DE GENTE | Se permite |
+| El aprobador es COORDINADOR o SUPERVISOR | Se valida que la sede y BU coincidan |
+| Sede diferente entre aprobador y empleado | `RAISE EXCEPTION` |
+| BU diferente (ambas no nulas) | `RAISE EXCEPTION` |
+
+---
+
+## Patrón de emergencia para recursión RLS
+
+Si en algún momento una política RLS causa recursión infinita (lo que puede bloquear el acceso completo a la tabla), el patrón de solución es:
+
+<Steps>
+  <Step title="Eliminar la política problemática">
+    ```sql
+    DROP POLICY IF EXISTS "nombre_de_la_politica" ON nombre_tabla;
+    ```
+  </Step>
+  <Step title="Crear una función SECURITY DEFINER">
+    En lugar de hacer la consulta directamente en la política (lo que puede causar recursión), encapsular la lógica en una función con `SECURITY DEFINER`:
+
+    ```sql
+    CREATE OR REPLACE FUNCTION check_user_access()
+    RETURNS BOOLEAN AS $$
+    BEGIN
+      -- lógica sin recursión
+      RETURN TRUE;
+    END;
+    $$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
+    ```
+  </Step>
+  <Step title="Recrear la política usando la función">
+    ```sql
+    CREATE POLICY "nueva_politica" ON nombre_tabla
+      FOR ALL TO authenticated
+      USING (check_user_access())
+      WITH CHECK (check_user_access());
+    ```
+  </Step>
+</Steps>
+
+Este es el mismo patrón que se aplicó en `20260318000002_rls_write_protection.sql` con la función `is_app_admin()`.
+
+---
+
+## Buenas prácticas
+
+<CardGroup cols={2}>
+  <Card title="Separar READ de WRITE" icon="lock">
+    Las tablas que necesitan ser legibles en el flujo de login (como `roles` y `role_modules`) deben tener `SELECT` abierto pero `INSERT`/`UPDATE`/`DELETE` protegidos.
+  </Card>
+  <Card title="Usar SECURITY DEFINER con cuidado" icon="shield-halved">
+    Las funciones `SECURITY DEFINER` se ejecutan con los permisos del creador. Verifica siempre que no expongan datos que el usuario no debería ver.
+  </Card>
+  <Card title="Nunca bypassear RLS en producción" icon="ban">
+    `ALTER TABLE nombre DISABLE ROW LEVEL SECURITY` no debe ejecutarse en producción. Si necesitas acceso total para una tarea administrativa, usa la `service role key` directamente en el SQL Editor.
+  </Card>
+  <Card title="Probar políticas con usuarios reales" icon="flask">
+    Antes de desplegar cambios en políticas RLS, pruébalos con usuarios de distintos roles para confirmar que no bloquean accesos legítimos.
+  </Card>
+</CardGroup>

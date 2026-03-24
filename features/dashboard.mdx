@@ -1,0 +1,135 @@
+---
+title: Dashboard
+description: Vista general de actividad del día, estadísticas clave y accesos rápidos al alcance de todos los usuarios según su rol.
+---
+
+El Dashboard es la pantalla de inicio de Gestión Gente. Muestra un resumen de la actividad del día, las métricas más importantes y accesos directos a las acciones más frecuentes. Los datos que se muestran están siempre acotados al alcance del usuario autenticado.
+
+## Tarjetas de estadísticas
+
+Al ingresar, aparecen cuatro tarjetas de KPI que se actualizan con los datos del periodo actual:
+
+<CardGroup cols={4}>
+  <Card title="Total Empleados" icon="users">
+    Cuenta de empleados activos dentro del alcance del usuario.
+  </Card>
+  <Card title="Asistencias Hoy" icon="clock">
+    Registros de asistencia creados en el día de hoy.
+  </Card>
+  <Card title="Solicitudes Pendientes" icon="file-text">
+    Solicitudes (vacaciones u otras) aún sin aprobar.
+  </Card>
+  <Card title="Tardanzas (Mes)" icon="alert-circle">
+    Marcaciones con `is_late = true` en el mes actual.
+  </Card>
+</CardGroup>
+
+### Alcance por rol
+
+Las estadísticas se cargan con tres funciones distintas según el tipo de usuario:
+
+<Tabs>
+  <Tab title="Administrador global">
+    Llama a `getDashboardStats(null, null)`, que invoca el RPC `get_main_dashboard_stats` sin filtros. Ve todas las sedes y unidades de negocio.
+
+    Se considera administrador global quien cumpla alguna de estas condiciones:
+    - Role `ADMIN`, `SUPER ADMIN` o `JEFE_RRHH`
+    - Posición que incluya `JEFE DE GENTE` o `GERENTE GENERAL`
+    - Permiso `*` en el objeto `permissions`
+    - Analista de Gente en `ADM. CENTRAL` / unidad `ADMINISTRACIÓN`
+  </Tab>
+  <Tab title="Jefe local">
+    Llama a `getDashboardStatsLocalBoss()`, que invoca el RPC `get_dashboard_stats_local_boss`. Este RPC lee internamente la tabla `user_allowed_sedes` para combinar la sede principal del usuario con las sedes adicionales asignadas, respetando las unidades de negocio correspondientes.
+
+    Se considera jefe local quien no sea administrador global y su rol o posición incluya `JEFE`, `GERENTE`, `COORDINADOR` o `SUPERVISOR`.
+  </Tab>
+  <Tab title="Empleado regular">
+    Llama a `getDashboardStats(sede, businessUnit)` con los valores de `sede` y `business_unit` del perfil del usuario. Solo ve métricas de su propia sede y unidad.
+  </Tab>
+</Tabs>
+
+## Feed de actividad reciente
+
+Bajo las tarjetas de estadísticas aparece el panel **Actividad Reciente**, que combina en tiempo real dos fuentes de datos:
+
+- **Asistencias** — registros de la tabla `attendance` con los campos `record_type`, `is_late`, `check_out`, `location_in`, `location_out` y datos del empleado relacionado.
+- **Solicitudes** — registros de `vacation_requests` normalizados al mismo formato (`record_type` ← `request_type`, `notes` ← rango de fechas).
+
+Se muestran hasta 10 eventos combinados, ordenados por `created_at` descendente.
+
+### Tipos de evento visualizados
+
+| `record_type` / condición | Etiqueta mostrada |
+|---|---|
+| `FALTA JUSTIFICADA`, `AUSENCIA SIN JUSTIFICAR`, `AUSENCIA`, `INASISTENCIA` | Falta Justificada / Falta Injustificada |
+| `DESCANSO MÉDICO` | Descanso Médico |
+| `LICENCIA CON GOCE` | Licencia con Goce |
+| `VACACIONES` | Vacaciones |
+| `is_late = true` | Marcó Entrada (Tarde) |
+| Default | Marcó Entrada (Puntual) |
+
+Cada evento también muestra:
+- Foto de perfil del empleado (o icono de estado si no tiene).
+- Indicador de ubicación GPS si `location_in` o `location_out` contienen coordenadas.
+- Etiqueta "Pendiente" si el registro es una ausencia o tardanza aún sin validar (`validated = false`).
+
+### Suscripción en tiempo real
+
+La función `subscribeToActivity` abre dos canales de Supabase Realtime:
+
+```js
+// Canal de asistencias
+supabase.channel('dashboard-attendance')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, handler)
+
+// Canal de solicitudes
+supabase.channel('dashboard-requests')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'vacation_requests' }, handler)
+```
+
+Cada evento entrante se enriquece con los datos del empleado (nombre, foto, sede, unidad) antes de añadirse al feed. Los eventos de tipo `DELETE` eliminan la entrada del listado sin recargar la página. Al desmontar el componente, ambos canales se cancelan con `subscription.unsubscribe()`.
+
+<Note>
+  El filtrado de seguridad del feed se aplica también en el cliente. Los usuarios no-administradores obtienen la lista de empleados permitidos mediante el RPC `get_employees_by_user_area` y solo ven los eventos de esos empleados. Los jefes locales reciben hasta 50 eventos; los empleados regulares, hasta 20.
+</Note>
+
+## Accesos rápidos
+
+A la derecha del feed se muestra el panel **Accesos Rápidos** con botones de navegación directa:
+
+<CardGroup cols={1}>
+  <Card title="Registrar Empleado" icon="user-plus">
+    Navega a `/register-employee`. Disponible para todos los usuarios con acceso al dashboard.
+  </Card>
+  <Card title="Reporte Mensual" icon="trending-up">
+    Abre el `MonthlyReportModal` con el asistente de IA. **Solo visible para usuarios con `canUseAI = true`** (ver sección siguiente).
+  </Card>
+  <Card title="Ver Calendario" icon="calendar">
+    Navega a `/calendar`. Disponible para todos los usuarios con acceso al dashboard.
+  </Card>
+</CardGroup>
+
+## Reporte Mensual con IA
+
+<Warning>
+  Esta funcionalidad es exclusiva para roles autorizados. El botón no aparece si el usuario no cumple las condiciones.
+</Warning>
+
+El acceso al asistente de IA (`canUseAI`) se evalúa en el cliente con la siguiente lógica (comparaciones normalizadas, sin acentos, en mayúsculas):
+
+```js
+const canUseAI =
+  _pos.includes('JEFE DE GENTE') ||
+  (
+    _pos.includes('ANALISTA DE GENTE') &&
+    _sede.includes('ADM') &&
+    _sede.includes('CENTRAL') &&
+    _bu.includes('ADMINISTRACI')
+  )
+```
+
+Es decir, pueden usar el Reporte Mensual:
+- Cualquier **Jefe de Gente** (independientemente de la sede).
+- Los **Analistas de Gente** cuya sede sea `ADM. CENTRAL` y su unidad de negocio sea `ADMINISTRACIÓN`.
+
+Al pulsar el botón, se abre el componente `MonthlyReportModal`.

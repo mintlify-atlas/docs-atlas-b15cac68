@@ -1,0 +1,113 @@
+---
+title: Bulk vacation upload
+description: Load historical vacation entitlements and entry dates for multiple employees at once by uploading an Excel file.
+---
+
+The **Carga Masiva de Histórico** page lets administrators load historical vacation data — entry dates and legacy consumed days — from an Excel file. This is the primary way to seed the system with data that predates the application.
+
+<Warning>
+  This page updates the `entry_date` and `legacy_days` fields on employee records. Uploading incorrect data will affect every employee's vacation balance. Review the preview table carefully before confirming the upload.
+</Warning>
+
+## What the bulk upload is for
+
+When an organization starts using Gestión Gente, employees already have a history of vacation days taken that the system does not yet know about. The bulk upload page lets you provide:
+
+- Each employee's official **entry date** (used to calculate earned days)
+- The number of **days already consumed** before the app (stored as `legacy_days`)
+
+These two values, combined with days consumed through approved in-app requests, determine the current balance shown on the vacation dashboard.
+
+## Expected Excel format
+
+The file must be an `.xlsx` or `.xls` workbook. The system automatically detects which sheet contains the most employee records by counting valid DNI values across all sheets.
+
+The expected column headers are:
+
+| Column | Required | Notes |
+|---|---|---|
+| `SEDE` | No | Sede name |
+| `DNI` | Yes | 8–12 digit numeric string |
+| `APELLIDOS Y NOMBRES` | No | Used for display in the preview table |
+| `FECHA DE INGRESO` | Yes | Accepts Excel serial numbers, `DD/MM/YYYY`, or `YYYY-MM-DD` |
+| `DIAS GANADOS` | No | Informational only; not written to the database |
+| `DIAS GOZADOS` | No | Historical days consumed; written as `legacy_days` |
+| `DIAS PENDIENTES POR GOZAR` | No | Informational only |
+
+<Note>
+  Column names are matched case-insensitively and accent-insensitively. A column named `Días Gozados` will match `DIAS GOZADOS`. Columns can appear in any order.
+</Note>
+
+You can download the official template directly from the page using the **Descargar Formato** button, which generates a correctly formatted `.xlsx` file named `formato_carga_vacaciones.xlsx`.
+
+## How to upload a file
+
+<Steps>
+  <Step title="Open the bulk upload page">
+    Navigate to the Carga Masiva de Histórico page. The page shows a drag-and-drop upload zone.
+  </Step>
+  <Step title="Select your file">
+    Click the upload zone to open a file picker. Select an `.xlsx` or `.xls` file.
+
+    The system reads the file in the browser, scans all sheets for the one with the most valid DNI values, and displays the detected sheet name and employee count in an alert.
+  </Step>
+  <Step title="Review the preview table">
+    A preview table appears showing the first 100 parsed records. Each row has a status indicator:
+
+    - **OK** (green) — the row has a valid DNI and a parseable entry date
+    - **Inválido** (red) — the DNI is missing or not 8–12 digits, or the entry date could not be parsed
+
+    The header bar shows the total row count and the number of valid rows.
+
+    <Note>
+      Only valid rows are submitted. Invalid rows are skipped automatically.
+    </Note>
+  </Step>
+  <Step title="Submit the upload">
+    Click **Procesar N Registros** to send the valid rows to the server. The button label shows the exact number of valid records that will be processed.
+
+    The system batches records in groups of 50 and calls the `bulk_update_vacations` Supabase RPC for each batch. This prevents hitting the 256-parameter limit on RPC calls.
+
+    ```javascript
+    // Each batch of up to 50 records calls:
+    await supabase.rpc('bulk_update_vacations', { p_data: batch })
+    ```
+  </Step>
+  <Step title="Check the result">
+    After processing, a result banner appears:
+
+    - **Proceso Completado** (green) — shows the number of employees successfully updated. Any per-record errors appear in a sub-list.
+    - **Error en la Carga** (red) — shows the error message if the entire upload failed.
+
+    The file and preview are cleared automatically on success.
+  </Step>
+</Steps>
+
+## Validation and error handling
+
+Validation happens at two stages:
+
+**Client-side (before submission):**
+
+- A row is marked invalid if its DNI does not match `/^\d{8,12}$/`
+- A row is marked invalid if `FECHA DE INGRESO` cannot be parsed into a `YYYY-MM-DD` string
+- Only rows where `isValid === true` are included in the payload sent to the server
+
+**Server-side (per batch):**
+
+- The `bulk_update_vacations` RPC processes each record and returns an `updated_count` and an `errors` array
+- If a batch fails entirely, the error is collected and reported; other batches continue processing
+- The final result aggregates `updated_count` across all batches and lists all batch-level errors
+
+<Tip>
+  If some records fail but others succeed, the result banner will show the partial success count and list the failing batch numbers. You can correct the problematic rows and re-upload only those records.
+</Tip>
+
+**Supported date formats for `FECHA DE INGRESO`:**
+
+| Format | Example |
+|---|---|
+| Excel serial number | `45000` |
+| ISO date string | `2019-03-15` |
+| Day/month/year | `15/03/2019` |
+| Any format parseable by `new Date()` | `March 15 2019` |

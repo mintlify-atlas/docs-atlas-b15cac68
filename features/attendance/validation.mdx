@@ -1,0 +1,137 @@
+---
+title: Attendance validation
+description: How supervisors and HR staff approve or reject flagged attendance records, and how to bulk-import attendance via Excel.
+---
+
+The **Validar Asistencias** page (`AttendanceValidation`) presents a queue of attendance records that require a manual decision — approval or rejection — before they are considered finalised.
+
+## What validation is
+
+Certain attendance records are stored with `validated = false`, meaning the system has logged the event but a human reviewer has not yet confirmed it. Records in this state show a **Pendiente** (pending) status in the attendance list and are surfaced on the validation page until acted upon.
+
+Records that typically require validation include:
+
+- Absences (any absence record type)
+- Late arrivals where `is_late = true` and `validated = false`
+
+## Who can access this page
+
+The page checks the current user's role on mount. Allowed roles are:
+
+```javascript
+const allowedRoles = [
+  'ANALISTA_RRHH',
+  'JEFE_RRHH',
+  'ADMIN',
+  'SUPERVISOR_VENTAS',
+  'JEFE_VENTAS',
+  'SUPERVISOR_OPERACIONES',
+  'COORDINADOR_OPERACIONES'
+]
+```
+
+As a fallback, users whose `position` contains `ANALISTA DE GENTE`, `JEFE DE ÁREA`, or `JEFE DE GENTE` are also granted access. Users who do not match either check are redirected to the home page.
+
+## Loading pending records
+
+The page calls `getPendingValidations(supervisorId, daysBack = 7)` from `src/services/attendance.js`, which invokes the `get_pending_validations` RPC. It returns up to 7 days of records pending validation for the supervisor's team.
+
+```javascript
+export async function getPendingValidations(supervisorId, daysBack = 7) {
+  const { data, error } = await supabase.rpc('get_pending_validations', {
+    p_supervisor_id: supervisorId,
+    p_days_back: daysBack
+  })
+  if (error) throw error
+  return data || []
+}
+```
+
+## Validating a record
+
+<Steps>
+  <Step title="Review the record">
+    Each card shows the employee's name and DNI, the work date, the record type, check-in and check-out times, an `is_late` indicator ("TARDE" label), any attached notes, and a link to evidence if one was uploaded.
+  </Step>
+  <Step title="Open the validation modal">
+    Click **Aprobar** or **Rechazar**. A modal (`validationModal`) opens with a textarea (`validationNotes`) for entering notes.
+
+    - For approvals, the note is optional.
+    - For rejections, a reason is required. Submitting without a reason shows a warning toast.
+  </Step>
+  <Step title="Confirm the decision">
+    Click the confirm button inside the modal. The `validateAttendance` service is called, which invokes the `supervisor_validate_attendance` RPC.
+
+    ```javascript
+    await validateAttendance({
+      attendanceId,
+      supervisorId: user.employee_id,
+      approved,          // true = approve, false = reject
+      notes              // text from validationNotes textarea
+    })
+    ```
+  </Step>
+  <Step title="Notification is sent">
+    After a successful validation, the platform inserts a notification into the `notifications` table for the employee:
+
+    - **Approved**: `SUCCESS` type — "Tu registro de asistencia del [date] fue validado por tu supervisor."
+    - **Rejected**: `WARNING` type — "Tu registro de asistencia del [date] fue rechazado. Motivo: [notes]."
+  </Step>
+  <Step title="Queue refreshes">
+    The page reloads the pending list automatically. If no records remain, a confirmation screen is shown: "¡Todo al día! No hay asistencias pendientes de validación."
+  </Step>
+</Steps>
+
+## The Pendiente badge
+
+In the attendance list (`AttendanceList`), records with `validated = false` display a **Pendiente** indicator. Once a record is approved or rejected through the validation page, the `validated` field is updated by the `supervisor_validate_attendance` RPC and the badge disappears on the next list reload.
+
+## Bulk import via Excel
+
+The attendance list page includes an **Importar** button that opens the bulk import modal. This allows you to upload an Excel file containing multiple attendance records at once.
+
+### Template format
+
+Download the template by clicking the template download button inside the import modal. The template has three columns:
+
+| Column | Format | Required |
+|---|---|---|
+| DNI | Employee's document number | Yes |
+| FECHA (YYYY-MM-DD) | Date string or Excel date cell | Yes |
+| HORA INGRESO (HH:MM) | Time string or Excel time cell | No |
+
+### How to import
+
+<Steps>
+  <Step title="Download the template">
+    Click the template download button. The file `plantilla_asistencias.xlsx` is saved to your computer.
+  </Step>
+  <Step title="Fill in the data">
+    Populate the template with DNI, date, and entry time for each record. Dates can be Excel date cells or `YYYY-MM-DD` strings. Times can be Excel time cells, `HH:MM` strings, or 12-hour format strings like `8:30 am`.
+  </Step>
+  <Step title="Upload the file">
+    Click **Importar**, select your file, and preview the parsed rows. Invalid rows (missing DNI or date) are highlighted.
+  </Step>
+  <Step title="Confirm the import">
+    Click the confirm button. Valid rows are sent to `bulkImportAttendance`, which calls the `bulk_import_attendance` RPC.
+
+    ```javascript
+    export async function bulkImportAttendance(records) {
+      const { data, error } = await supabase.rpc('bulk_import_attendance', {
+        p_records: records
+      })
+      if (error) throw error
+      return data
+    }
+    ```
+
+    Each record is submitted as `record_type = ASISTENCIA`. The time is converted to UTC from Peru time (`-05:00`) before being sent.
+  </Step>
+  <Step title="Review the result">
+    The modal shows the count of successfully imported records and, if any rows failed, the number of errors and their details. The attendance list reloads automatically.
+  </Step>
+</Steps>
+
+<Warning>
+  Only rows with a valid DNI and date pass the `isValid` check. Rows missing either field are skipped and counted as errors in the result summary.
+</Warning>

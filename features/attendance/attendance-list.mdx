@@ -1,0 +1,148 @@
+---
+title: Attendance list
+description: How to navigate, filter, export, and read the Registro de Asistencias page.
+---
+
+The **Registro de Asistencias** page (`AttendanceList`) is the main attendance interface. It shows all attendance records scoped to the current user's role, lets you slice the data with filters, and allows exporting to Excel.
+
+## Summary statistics
+
+At the top of the page, four counters summarize the records currently in scope:
+
+| Counter | Meaning |
+|---|---|
+| Total | All records matching the active filters |
+| Puntuales | `record_type = ASISTENCIA` and `is_late = false` |
+| Tardanzas | `record_type = ASISTENCIA` and `is_late = true` |
+| Ausencias | Any absence variant: `AUSENCIA`, `INASISTENCIA`, `FALTA JUSTIFICADA`, `AUSENCIA SIN JUSTIFICAR`, `FALTA_INJUSTIFICADA`, or implicit absence (no `check_in` and not a scheduled leave type) |
+
+## Filters
+
+The filter bar contains five controls.
+
+<AccordionGroup>
+  <Accordion title="Employee search">
+    Free-text search applied in memory against the employee's `full_name` and `dni`. Matches are case-insensitive. Enter a name or DNI number and the list updates immediately.
+  </Accordion>
+  <Accordion title="Status filter">
+    Dropdown with the following options:
+
+    | Option | What it shows |
+    |---|---|
+    | Todos | All record types |
+    | Puntuales | `ASISTENCIA` with `is_late = false` |
+    | Tardanzas | `ASISTENCIA` with `is_late = true` |
+    | Ausencias (Todas) | All absence variants |
+    | Descanso Médico | `DESCANSO MÉDICO` |
+    | Licencia | `LICENCIA CON GOCE` |
+    | Vacaciones | Records from approved `vacation_requests` |
+  </Accordion>
+  <Accordion title="Date range — Desde / Hasta">
+    Two date inputs controlling `dateFrom` and `dateTo`. Both default to today's date in the Peru timezone (UTC-5). When `dateFrom === dateTo`, the page uses the daily roster mode (`get_daily_attendance_report` RPC), which includes all employees for that day — even those with no check-in record. For a date range, the page queries the `attendance` table directly.
+  </Accordion>
+  <Accordion title="Clear filters button">
+    Appears only when at least one filter differs from the defaults (today's date, status = all, empty search). Clicking it resets all filters to today and clears the search term.
+  </Accordion>
+</AccordionGroup>
+
+### Filter persistence
+
+Filters are saved to `localStorage` under the key `attendance_list_filters` each time they change. The saved object includes the user's ID so that filters are not shared between different accounts on the same browser.
+
+```javascript
+// Key used for localStorage
+const ATTENDANCE_FILTERS_KEY = 'attendance_list_filters'
+
+// Saved structure
+{
+  userId: user.id,
+  filters: { status, dateFrom, dateTo, search },
+  timestamp: Date.now()
+}
+```
+
+<Note>
+  Date values are **not** restored from localStorage. The page always initialises `dateFrom` and `dateTo` to the current Peru date (UTC-5) to prevent the list from silently showing yesterday's data if the browser tab is left open overnight.
+</Note>
+
+## Peru timezone handling
+
+All date calculations use a fixed UTC-5 offset regardless of the browser's local timezone. This ensures consistent behavior for users working outside Peru.
+
+```javascript
+const getPeruDate = () => {
+  const now = new Date()
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000)
+  const peruTime = new Date(utc + (3600000 * -5))
+  const year = peruTime.getFullYear()
+  const month = String(peruTime.getMonth() + 1).padStart(2, '0')
+  const day = String(peruTime.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+```
+
+Dates in the export file are formatted as `DD/MM/YYYY` and times are formatted with `America/Lima` as the IANA timezone.
+
+## Attendance table columns
+
+| Column | Source field | Notes |
+|---|---|---|
+| Empleado | `employees.full_name`, `employees.dni`, `employees.position` | Truncated if long; full value shown on hover |
+| Fecha | `work_date` | Formatted as short weekday + date |
+| Entrada | `check_in` | 12-hour format |
+| Estado | `record_type` + `is_late` | Badge: PUNTUAL, TARDANZA, AUSENCIA, DESCANSO MÉDICO, LICENCIA, VACACIONES |
+| Tipo | `record_type` | Secondary classification badge |
+| Motivo | `notes` or `absence_reason` | Reason text if available |
+| Validado | `validated` | Checkbox or badge |
+| Ubicación | `location_in` | MapPin icon; click to view coordinates |
+
+### Geolocation (MapPin indicator)
+
+When a record has a non-null `location_in` field, a **MapPin** icon is rendered in the Ubicación column. Clicking it opens a modal that displays the stored coordinates. Records without location data show no icon in this column.
+
+## Pagination controls
+
+The list shows 20 records per page (`PAGE_SIZE = 20`). Navigation buttons appear below the table:
+
+- **Previous** (`ChevronLeft`) — disabled on page 1
+- Page indicator showing current page and total pages
+- **Next** (`ChevronRight`) — disabled on the last page
+
+Changing any filter resets the page back to 1.
+
+## Exporting to Excel
+
+The **Exportar** button triggers `exportToExcel()`, which fetches all matching records (not just the current page) and writes them to an `.xlsx` file.
+
+<Steps>
+  <Step title="Set your filters">
+    Apply the date range, status, and search filters to narrow the export to the records you need.
+  </Step>
+  <Step title="Click Exportar">
+    The button shows a spinner while the data is being fetched. Do not navigate away during this time.
+  </Step>
+  <Step title="Save the file">
+    The browser downloads a file named `Reporte_Asistencias_YYYY-MM-DD_al_YYYY-MM-DD.xlsx`.
+  </Step>
+</Steps>
+
+The exported spreadsheet contains these columns:
+
+| Column | Notes |
+|---|---|
+| Fecha | DD/MM/YYYY format |
+| Empleado | Full name |
+| DNI | Document number |
+| Cargo | Position |
+| Sede | Office location |
+| Hora Entrada | HH:MM AM/PM in America/Lima timezone |
+| Hora Salida | HH:MM AM/PM in America/Lima timezone |
+| Estado | PUNTUAL, TARDANZA, AUSENCIA, DESCANSO MÉDICO, LICENCIA, or VACACIONES |
+| Tipo | Secondary classification |
+| AUSENTISMO | `ASISTENCIA` or `AUSENTISMO` — useful for pivot tables |
+| Validado | SÍ or NO |
+| Motivo/Notas | Notes or absence reason |
+
+<Tip>
+  The AUSENTISMO column makes it straightforward to build Excel pivot tables that split presence from absence, because all non-absent record types (including TARDANZA, DESCANSO MÉDICO, LICENCIA, and VACACIONES) map to `ASISTENCIA` in this column, while all absence variants map to `AUSENTISMO`.
+</Tip>

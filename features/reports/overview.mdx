@@ -1,0 +1,67 @@
+---
+title: 'Reports center'
+description: 'Overview of the Reports Center: available report types, access control, and role-based data scoping.'
+---
+
+The Reports Center (Centro de Reportes) is the centralized hub for downloading operational HR data as Excel files. It provides five ready-to-export report types covering employees, attendance, new hires, vacation balances, and terminations.
+
+## Access requirements
+
+The Reports Center is protected by the `reports` module permission. A user must have `can_read` enabled for the `reports` module key in their role's permission matrix to see the page.
+
+<Note>
+Module access is configured in the Roles Management page under the Módulos tab. See [Roles management](/features/config/roles-management) for details.
+</Note>
+
+## Report types
+
+<CardGroup cols={2}>
+  <Card title="Maestro de Empleados" icon="users">
+    Complete employee roster with personal, employment, banking, and contact data.
+  </Card>
+  <Card title="Reporte de Asistencias" icon="clock">
+    Daily attendance detail: check-in/check-out times, tardiness, and validation status for a selected date range.
+  </Card>
+  <Card title="Nuevos Ingresos" icon="user-plus">
+    Monthly list of employees who joined the company in a selected month and year.
+  </Card>
+  <Card title="Saldos de Vacaciones" icon="briefcase">
+    Consolidated vacation balance per employee: earned days, days taken, current balance, and a traffic-light status indicator.
+  </Card>
+  <Card title="Reporte de Bajas" icon="user-minus">
+    List of terminated employees within a date range, including termination reason and documents.
+  </Card>
+</CardGroup>
+
+## Role-based data scoping
+
+The data returned by each report is automatically scoped based on the authenticated user's role and position. The scoping logic works as follows:
+
+| User type | Sede filter | Business unit filter |
+|---|---|---|
+| Global admin (`ADMIN`, `SUPER ADMIN`, `JEFE_RRHH`, `SISTEMAS`, or `permissions['*']`) | Free — all sedes | Free — all units |
+| Jefe de Gente y Gestión | Free — all sedes | Free — all units |
+| Analista de Gente (ADM. CENTRAL / ADMINISTRACIÓN) | Free — all sedes | Free — all units |
+| All other users | Locked to own `sede` | Locked to own `business_unit` |
+
+Users who cannot use free filters have the sede and business unit selectors disabled in the UI. Their requests are automatically sent with their profile's `sede` and `business_unit` values.
+
+<Warning>
+Frontend filter controls are hidden entirely for users without free-filter access. The locked values are sourced from the authenticated user's profile and sent directly to the API.
+</Warning>
+
+## Available filters
+
+When a user has free-filter access, the following shared filters are shown above all report cards:
+
+- **Sede** — select one of the available branch offices or "Todas las Sedes"
+- **Unidad de Negocio** — select a business unit (list is narrowed based on the selected sede)
+- **Área** — select a specific organizational area
+
+Additional per-report filters (date range, month/year) are shown inside each report card.
+
+## Export format
+
+All reports are exported as `.xlsx` files using the [`@e965/xlsx`](https://www.npmjs.com/package/@e965/xlsx) library. The workbook is built in memory and downloaded directly to the user's browser — no server-side file storage is involved.
+
+Column widths are set automatically to a minimum of 15 characters per column header. Each report produces a single worksheet named according to the report type.

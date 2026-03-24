@@ -1,0 +1,92 @@
+---
+title: 'Job positions'
+description: 'How to create, edit, and delete job positions (cargos) and how they relate to employees and RBAC.'
+---
+
+Job positions (cargos) are the named roles that employees hold within the organization — for example, `ANALISTA DE SISTEMAS` or `JEFE DE GENTE Y GESTIÓN`. Every employee record has a `position` field that references a position name.
+
+## What positions control
+
+- **Employee classification** — each position has a `employee_type` (`ADMINISTRATIVO`, `OPERATIVO`, or `COMERCIAL`) that classifies the employees who hold it.
+- **Area assignment** — positions are assigned to organizational areas. This determines which area an employee belongs to when generating reports (the area is resolved via the `job_positions → areas` join, not stored directly on the employee).
+- **RBAC role fallback** — when the system looks up a user's role and no direct `role_id` is set on the employee, it falls back to matching by `position` name. A role whose name equals the employee's position is used.
+
+<Note>
+Role assignment by position is performed automatically when a new role is created. The `assignEmployeesByPosition` function updates all employees whose `position` matches the new role name.
+</Note>
+
+## Viewing positions
+
+Navigate to **Configuración → Cargos / Puestos**. The table shows:
+
+| Column | Description |
+|---|---|
+| Nombre del Cargo | Position name (always uppercase) |
+| Tipo de Personal | `ADMINISTRATIVO`, `OPERATIVO`, or `COMERCIAL` |
+| Empleados | Count of employees currently holding this position |
+
+Use the search box to filter by position name or employee type.
+
+## Creating a position
+
+<Steps>
+  <Step title="Open the create modal">
+    Click **Nuevo Cargo** in the top-right corner of the page.
+  </Step>
+  <Step title="Enter the position name">
+    Type the position name. Names are stored in uppercase automatically.
+  </Step>
+  <Step title="Select the employee type">
+    Choose one of `ADMINISTRATIVO`, `OPERATIVO`, or `COMERCIAL`. The default is `OPERATIVO`.
+  </Step>
+  <Step title="Save">
+    Click **Guardar**. The new position appears in the table immediately.
+  </Step>
+</Steps>
+
+## Editing a position
+
+<Steps>
+  <Step title="Click the edit icon">
+    Click the pencil icon on the right side of the position row.
+  </Step>
+  <Step title="Update the fields">
+    Modify the name or employee type as needed.
+  </Step>
+  <Step title="Save">
+    Click **Guardar** to apply the changes.
+  </Step>
+</Steps>
+
+<Warning>
+Renaming a position does not automatically update the `position` field on existing employee records. Employees will keep the old position name until their profile is manually updated.
+</Warning>
+
+## Deleting a position
+
+Click the trash icon on the position row. If any employees are currently assigned to that position, deletion is blocked and an alert is shown indicating the number of assigned employees.
+
+<Warning>
+A position can only be deleted when its employee count is zero.
+</Warning>
+
+## Service functions
+
+```javascript
+import { getPositions, createPosition, updatePosition, deletePosition } from '../services/positions'
+
+// Fetch all positions with employee count and area
+const { data, error } = await getPositions()
+// Returns: [{ id, name, employee_type, employee_count, area_name, area_id }]
+
+// Create a new position
+await createPosition({ name: 'ANALISTA DE SISTEMAS', employee_type: 'ADMINISTRATIVO' })
+
+// Update an existing position
+await updatePosition(id, { name: 'NUEVO NOMBRE', employee_type: 'OPERATIVO' })
+
+// Delete a position
+await deletePosition(id)
+```
+
+`getPositions` queries the `job_positions` table and includes a count of related employees and the linked area name/ID from the `areas` table.

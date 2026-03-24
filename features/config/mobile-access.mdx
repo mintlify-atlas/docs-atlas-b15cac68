@@ -1,0 +1,107 @@
+---
+title: 'Mobile access configuration'
+description: 'How to configure which employees can use the mobile app by defining access policies based on sede, business unit, or position.'
+---
+
+The Mobile Access Configuration page (Control de Acceso Móvil) lets administrators define rules that block certain employees from logging in to the mobile app. These rules are based on the presence of a physical biometric time clock (huellero) at a given sede, business unit, or for a specific position.
+
+## How access is determined
+
+Access to the mobile app is **permitted by default**. A rule only restricts access. When a user attempts to log in to the mobile app, the system checks whether any `mobile_access_policies` record matches their sede, business unit, or position:
+
+- If a matching rule exists with `has_physical_time_clock = true`, the user is blocked from the mobile app and sees a message directing them to use the biometric clock.
+- If no matching rule exists, the user can log in to the mobile app.
+
+<Note>
+This page configures `mobile_access_policies`. The `roles.mobile_access` flag is a separate, role-level toggle managed from the [Roles management](/features/config/roles-management) page. Both controls apply independently.
+</Note>
+
+## Policy scope types
+
+Each rule targets one of three scope types:
+
+<CardGroup cols={3}>
+  <Card title="Sede" icon="map-pin">
+    Applies to all employees at a specific branch office.
+  </Card>
+  <Card title="Unidad de Negocio" icon="building-2">
+    Applies to all employees in a specific business unit.
+  </Card>
+  <Card title="Cargo" icon="briefcase">
+    Applies to all employees holding a specific job position.
+  </Card>
+</CardGroup>
+
+## Viewing existing policies
+
+Navigate to **Configuración → Control de Acceso Móvil**. The page shows a table with all existing policies:
+
+| Column | Description |
+|---|---|
+| Alcance | Scope type: `SEDE`, `UNIDAD DE NEGOCIO`, or `CARGO` |
+| Valor | The specific sede name, business unit name, or position name |
+| Configuración | `App Bloqueada (Usa Huellero)` or `App Permitida` |
+
+If no policies exist, a message indicates that all users currently have mobile app access.
+
+## Creating a policy
+
+<Steps>
+  <Step title="Click Nueva Regla">
+    Opens the create modal.
+  </Step>
+  <Step title="Select the scope type">
+    Choose **Sede**, **Unidad** (business unit), or **Cargo** (position).
+  </Step>
+  <Step title="Select the scope value">
+    - **Sede**: Select from a dropdown of available sedes.
+    - **Unidad de Negocio**: Type or select from a datalist of business units sourced from the organization structure.
+    - **Cargo**: Select from a dropdown of all job positions.
+  </Step>
+  <Step title="Set the Huellero toggle">
+    The **¿Tiene Huellero Físico?** toggle defaults to on (red), which means the mobile app will be **blocked** for matching employees. Toggle it off (green) if you want to explicitly mark a scope as allowed (unusual — access is already allowed by default when no rule exists).
+  </Step>
+  <Step title="Click Guardar Regla">
+    The policy is saved to `mobile_access_policies` and appears in the table immediately.
+  </Step>
+</Steps>
+
+## Deleting a policy
+
+Click the trash icon on any policy row. A confirmation dialog appears before deletion. Removing a rule restores default access (permitted) for the affected employees.
+
+<Warning>
+Deleting a policy immediately restores mobile app access for all employees matched by that rule. Make sure this is intentional before confirming.
+</Warning>
+
+## Relationship to `roles.mobile_access`
+
+The `roles.mobile_access` flag and `mobile_access_policies` are independent controls:
+
+| Control | Location | Effect |
+|---|---|---|
+| `roles.mobile_access` | Roles management → role card toggle | Grants or denies mobile access at the role level |
+| `mobile_access_policies` | Mobile access configuration page | Blocks mobile access based on sede, business unit, or position |
+
+A user needs `roles.mobile_access = true` on their role **and** no blocking `mobile_access_policies` record to access the mobile app.
+
+## Service functions
+
+```javascript
+import { getPolicies, createPolicy, deletePolicy } from '../services/mobileAccess'
+
+// Fetch all policies
+const { data, error } = await getPolicies()
+// Returns: [{ id, scope_type, scope_value, has_physical_time_clock, created_by, created_at }]
+
+// Create a policy
+await createPolicy({
+  scope_type: 'SEDE',         // 'SEDE' | 'BUSINESS_UNIT' | 'POSITION'
+  scope_value: 'TRUJILLO',
+  has_physical_time_clock: true,
+  created_by: employeeId      // or null
+})
+
+// Delete a policy
+await deletePolicy(policyId)
+```

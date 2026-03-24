@@ -1,0 +1,87 @@
+---
+title: Registrar y editar empleados
+description: Formulario para dar de alta a un nuevo colaborador o modificar los datos de uno existente.
+---
+
+El formulario de registro (`RegisterEmployee`) se usa tanto para crear nuevos empleados como para editar los existentes. La ruta `/register-employee` crea un nuevo registro; la ruta `/edit-employee/:id` carga los datos del empleado indicado y los hace editables.
+
+## Crear un nuevo empleado
+
+<Steps>
+  <Step title="Acceder al formulario">
+    Navega a **Registrar Empleado** desde el Dashboard o desde el botón **Nuevo Empleado** en la lista de empleados. La URL puede recibir parámetros `?sede=` y `?business=` que pre-rellenan los campos correspondientes.
+  </Step>
+  <Step title="Seleccionar sede y unidad de negocio">
+    Elige la sede del empleado. Las unidades de negocio disponibles se cargan dinámicamente según la sede seleccionada usando `getOrganizationStructure()`. Si solo existe una unidad para la sede elegida, se selecciona automáticamente.
+
+    <Note>
+      Para usuarios sin permisos de administrador global (`SUPER ADMIN` / `ADMIN` / permiso `*`), el campo de sede se bloquea con el valor de `user.sede` y no puede modificarse.
+    </Note>
+  </Step>
+  <Step title="Completar los campos obligatorios">
+    Rellena todos los campos requeridos (ver tabla más abajo). El formulario valida en el cliente antes de enviar.
+  </Step>
+  <Step title="Seleccionar el puesto">
+    Elige el puesto desde la lista de `job_positions`. El puesto solo está disponible después de seleccionar la unidad de negocio. Al elegirlo, se asigna automáticamente el campo `employee_type` según el valor registrado en el catálogo de posiciones.
+  </Step>
+  <Step title="Guardar">
+    Pulsa **Guardar Empleado**. Si la validación pasa, se llama a `createEmployee()` que inserta el registro en la tabla `employees` de Supabase. Tras el guardado exitoso, la vista vuelve a la pantalla anterior.
+  </Step>
+</Steps>
+
+## Campos del formulario
+
+### Campos obligatorios
+
+| Campo | Validación |
+|---|---|
+| **Sede / Ciudad** | Requerida. Bloqueada para usuarios sin permiso global. |
+| **Unidad de Negocio** | Requerida. Depende de la sede seleccionada. |
+| **Tipo de Documento** | `DNI` (8 dígitos numéricos) o `CE` (9–12 dígitos numéricos). |
+| **Número de documento** | Solo números. Longitud validada según el tipo seleccionado. |
+| **Apellidos y Nombres** | Mínimo 5 caracteres. Se guarda en mayúsculas. |
+| **Fecha de Ingreso** | Requerida. |
+| **Puesto / Cargo** | Seleccionable desde el catálogo de `job_positions`. Requiere unidad de negocio. |
+| **Celular** | Exactamente 9 dígitos numéricos. |
+| **Correo Corporativo** | Formato de email válido. |
+| **Cumpleaños** | Requerido. El empleado debe ser mayor de 18 años. |
+| **Dirección** | Requerida. Se guarda en mayúsculas. |
+
+### Campos opcionales / auto-asignados
+
+| Campo | Origen |
+|---|---|
+| `employee_type` | Se asigna automáticamente al seleccionar el puesto, tomando el valor `employee_type` del catálogo de posiciones. |
+| `job_position_id` | ID del puesto seleccionado en el catálogo. |
+
+<Warning>
+  Los campos `role_id`, `location_id` y `department_id` se envían como `null` al backend para evitar conflictos de tipos entre tablas. El vínculo real se establece a través de `job_position_id` y los campos `sede` / `business_unit` en texto plano.
+</Warning>
+
+## Editar un empleado existente
+
+La ruta `/edit-employee/:id` reutiliza el mismo formulario. Al montar el componente con un `:id`, se llama a `getEmployeeById(id)` y los datos se cargan en el formulario.
+
+Al guardar, se llama a `updateEmployee(id, data)`. Los campos modificables son los mismos que en el alta.
+
+```
+Ruta de edición: /edit-employee/:id
+```
+
+<Tip>
+  Puedes acceder a la edición directamente desde la tabla de empleados pulsando el ícono de lápiz en la columna de acciones (disponible solo para usuarios con `canManage = true`).
+</Tip>
+
+## Foto de perfil
+
+El formulario de registro no incluye la subida de foto de perfil directamente. La foto (`profile_picture_url`) se muestra en el perfil del empleado una vez que ha sido cargada a través del proceso correspondiente en la aplicación móvil o por otros medios.
+
+## Asignación de puesto y área
+
+El campo **Puesto / Cargo** selecciona un registro de la tabla `job_positions`. Este registro lleva asociado:
+
+- El nombre del puesto (`position` en el empleado).
+- El `employee_type` (ADMINISTRATIVO u OPERATIVO).
+- El área a la que pertenece el puesto (vía `job_positions.areas`), que se usa en los filtros de la lista de empleados.
+
+El área no se elige directamente en el formulario; se deriva automáticamente del puesto seleccionado.

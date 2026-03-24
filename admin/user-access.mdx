@@ -1,0 +1,232 @@
+---
+title: "Acceso de Usuarios"
+description: "Cómo gestionar quién puede acceder a la plataforma web: flags de acceso, estado activo/inactivo, asignación de roles y diagnóstico de problemas de login."
+---
+
+## Cómo se controla el acceso a la plataforma web
+
+Cuando un usuario intenta iniciar sesión, `fetchProfile` en `AuthContext.jsx` ejecuta las siguientes validaciones en orden:
+
+<Steps>
+  <Step title="Verificar registro en employees">
+    Se busca el registro del usuario en la tabla `employees` filtrando por email. Si no existe ningún registro, se hace logout inmediato — estar autenticado en Supabase Auth no es suficiente.
+  </Step>
+  <Step title="Verificar estado activo">
+    ```jsx
+    if (employeeData.is_active === false) {
+      showToast('Tu cuenta ha sido desactivada. Contacta a RRHH.', 'error')
+      await supabase.auth.signOut()
+    }
+    ```
+    El campo `employees.is_active` es un booleano. Si es `false`, el acceso queda bloqueado sin importar el rol.
+  </Step>
+  <Step title="Verificar web_access del rol">
+    Si el empleado tiene un rol asignado via FK (`role_id`), se consulta la tabla `roles` y se verifica `web_access`:
+    ```jsx
+    if (employeeData.roles && employeeData.roles.web_access === false) {
+      showToast('Tu rol actual no tiene permisos para acceder a la plataforma Web.', 'error')
+      await supabase.auth.signOut()
+    }
+    ```
+    Esta validación **solo aplica** si el empleado tiene `role_id` con FK. Si usa el campo legado `role` (texto), no se valida `web_access`.
+  </Step>
+  <Step title="Cargar permisos de módulos">
+    Si pasa todas las validaciones anteriores, se cargan los permisos de `role_modules` y las sedes adicionales de `user_allowed_sedes`. El usuario queda autenticado.
+  </Step>
+</Steps>
+
+---
+
+## El campo `is_active`
+
+| Valor | Efecto |
+|---|---|
+| `true` (default) | El usuario puede iniciar sesión si su rol lo permite |
+| `false` | El acceso queda bloqueado. Se muestra el mensaje *"Tu cuenta ha sido desactivada. Contacta a RRHH."* |
+
+Para desactivar un usuario:
+
+```sql
+UPDATE employees
+SET is_active = false
+WHERE email = 'usuario@empresa.com';
+```
+
+<Note>
+  Desactivar un usuario en `employees` no elimina su cuenta de Supabase Auth. Solo bloquea el acceso a la plataforma. Para invalidar el token activo también es necesario eliminar la sesión desde el panel de Supabase Auth.
+</Note>
+
+---
+
+## Cómo otorgar o bloquear acceso web
+
+<Tabs>
+  <Tab title="Otorgar acceso web">
+    El acceso web se otorga habilitando el flag en la tabla `roles`:
+
+    ```sql
+    UPDATE roles
+    SET web_access = true
+    WHERE name = 'JEFE DE VENTAS';
+    ```
+
+    Todos los empleados con `role_id` apuntando a ese rol podrán ingresar a la plataforma web.
+  </Tab>
+  <Tab title="Bloquear acceso web">
+    ```sql
+    UPDATE roles
+    SET web_access = false
+    WHERE name = 'OPERARIO';
+    ```
+
+    Los empleados de ese rol verán el mensaje *"Tu rol actual no tiene permisos para acceder a la plataforma Web."* y serán desconectados.
+  </Tab>
+  <Tab title="Acceso móvil">
+    El acceso a la app móvil se controla con el flag `mobile_access` en la misma tabla:
+
+    ```sql
+    UPDATE roles
+    SET mobile_access = true
+    WHERE name = 'OPERARIO';
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Asignar roles a empleados
+
+Usando las funciones de `src/services/roles.js`:
+
+<Tabs>
+  <Tab title="Asignar a un empleado">
+    ```jsx
+    import { assignRoleToUser } from '../services/roles'
+
+    // employeeId: UUID del empleado
+    // roleId: bigint del rol en la tabla roles
+    const { data, error } = await assignRoleToUser(employeeId, roleId)
+    ```
+
+    Esto actualiza `employees.role_id` con la FK al rol.
+  </Tab>
+  <Tab title="Asignar por cargo (bulk)">
+    ```jsx
+    import { assignEmployeesByPosition } from '../services/roles'
+
+    // Asigna el rol a todos los empleados cuyo campo position
+    // coincida con positionName (case-insensitive)
+    await assignEmployeesByPosition('JEFE DE VENTAS', roleId)
+    ```
+  </Tab>
+  <Tab title="Empleados sin rol">
+    ```jsx
+    import { getUsersWithoutRole } from '../services/roles'
+
+    const { data } = await getUsersWithoutRole()
+    // Devuelve empleados donde role_id IS NULL
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Flujo completo de validación de acceso
+
+```
+Usuario ingresa credenciales
+        │
+        ▼
+  Supabase Auth autentica
+        │
+        ▼
+  fetchProfile(authUser)
+        │
+        ├─► is_super_admin en app_metadata?
+        │       SÍ → acceso total, fin
+        │       NO ↓
+        │
+        ├─► empleado existe en employees (por email)?
+        │       NO → logout
+        │       SÍ ↓
+        │
+        ├─► is_active === false?
+        │       SÍ → logout + toast
+        │       NO ↓
+        │
+        ├─► tiene role_id y el rol tiene web_access === false?
+        │       SÍ → logout + toast
+        │       NO ↓
+        │
+        └─► Cargar permisos de role_modules + allowed_sedes
+                → setUser(finalUser) → acceso concedido
+```
+
+---
+
+## Diagnóstico: usuario que no puede iniciar sesión
+
+<Accordion title="El usuario ve 'Tu cuenta ha sido desactivada'">
+  El campo `employees.is_active` está en `false`.
+
+  ```sql
+  SELECT id, full_name, is_active
+  FROM employees
+  WHERE LOWER(email) = LOWER('usuario@empresa.com');
+  ```
+
+  Para reactivar:
+  ```sql
+  UPDATE employees SET is_active = true WHERE email = 'usuario@empresa.com';
+  ```
+</Accordion>
+
+<Accordion title="El usuario ve 'Tu rol actual no tiene permisos para acceder a la plataforma Web'">
+  El rol asignado tiene `web_access = false`.
+
+  ```sql
+  SELECT e.email, r.name as rol, r.web_access
+  FROM employees e
+  JOIN roles r ON e.role_id = r.id
+  WHERE LOWER(e.email) = LOWER('usuario@empresa.com');
+  ```
+
+  Opciones:
+  - Habilitar `web_access` en el rol: `UPDATE roles SET web_access = true WHERE name = 'ROL';`
+  - Asignar un rol diferente al empleado.
+</Accordion>
+
+<Accordion title="El usuario se autentica pero queda en pantalla de carga">
+  El empleado no tiene registro en la tabla `employees` con ese email, o hay un error de red temporal.
+
+  ```sql
+  SELECT id, full_name, email, is_active
+  FROM employees
+  WHERE LOWER(email) = LOWER('usuario@empresa.com');
+  ```
+
+  Si no hay resultados, crear el registro en `employees` primero.
+</Accordion>
+
+<Accordion title="El usuario inicia sesión pero no ve ningún módulo">
+  No existen entradas en `role_modules` para su rol (ni para la categoría genérica de su cargo).
+
+  ```sql
+  SELECT * FROM role_modules
+  WHERE UPPER(role_name) = UPPER('ROL_DEL_USUARIO');
+  ```
+
+  Si no hay resultados, usar `upsertRoleModule` o insertar directamente en `role_modules`.
+</Accordion>
+
+<Accordion title="El usuario perdió acceso después de un renombrado de rol">
+  Si el rol fue renombrado en la tabla `roles`, el trigger `trg_sync_role_modules_on_rename` debería haber actualizado `role_modules` automáticamente. Verificar:
+
+  ```sql
+  SELECT * FROM role_modules WHERE role_name = 'NOMBRE_ANTERIOR';
+  -- No debe devolver resultados después del renombrado
+
+  SELECT * FROM role_modules WHERE role_name = 'NOMBRE_NUEVO';
+  -- Debe devolver los permisos migrados
+  ```
+</Accordion>

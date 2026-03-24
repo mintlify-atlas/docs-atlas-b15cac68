@@ -1,0 +1,227 @@
+---
+title: "Migraciones de Base de Datos"
+description: "Descripción de todos los archivos de migración en supabase/migrations/, cómo aplicarlos y la convención de nombres utilizada."
+---
+
+## Ubicación y convención de nombres
+
+Todas las migraciones se encuentran en:
+
+```
+supabase/migrations/
+```
+
+El formato de nombre de archivo es:
+
+```
+YYYYMMDDHHMMSS_descripcion_corta.sql
+```
+
+Ejemplo: `20260318000002_rls_write_protection.sql`
+
+- El prefijo numérico garantiza el orden de ejecución.
+- La descripción usa `snake_case` y resume el objetivo del archivo.
+- Todas las migraciones son acumulativas y se aplican en orden estrictamente ascendente.
+
+---
+
+## Listado de migraciones
+
+### `20260308000000_esquema_completo.sql`
+
+Dump completo del esquema de la base de datos generado con `pg_dump` (PostgreSQL 17.6). Contiene:
+
+- Todos los esquemas (`auth`, `public`).
+- Extensiones requeridas (`pg_cron`, etc.).
+- Definición completa de todas las tablas públicas: `employees`, `roles`, `role_modules`, `attendance`, `vacation_requests`, `areas`, `job_positions`, `departments`, `sedes`, `business_units`, `locations`, `schedules`, `notifications`, y otras.
+- Todas las funciones RPC del backend (incluyendo `get_employees_by_user_area`, `get_my_employees_v2`, `get_daily_attendance_report`, y otras).
+- Índices, constraints, sequences y políticas RLS base.
+
+<Note>
+  Este archivo está codificado en **UTF-16 LE** (generado en Windows). Antes de aplicarlo con herramientas de línea de comandos, convírtelo a UTF-8:
+
+  ```bash
+  iconv -f UTF-16LE -t UTF-8 20260308000000_esquema_completo.sql -o esquema_utf8.sql
+  ```
+</Note>
+
+---
+
+### `20260318000001_role_rename_cascade.sql`
+
+**Problema resuelto:** `role_modules.role_name` es un campo de texto sin FK hacia `roles`. Al renombrar un rol en la tabla `roles`, los permisos en `role_modules` quedaban huérfanos con el nombre antiguo.
+
+**Solución:** Un trigger `AFTER UPDATE` en la tabla `roles` que sincroniza `role_modules` automáticamente.
+
+```sql
+CREATE OR REPLACE FUNCTION sync_role_modules_on_role_rename()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.name IS DISTINCT FROM NEW.name THEN
+    UPDATE role_modules
+    SET role_name = NEW.name
+    WHERE UPPER(TRIM(role_name)) = UPPER(TRIM(OLD.name));
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER trg_sync_role_modules_on_rename
+  AFTER UPDATE OF name ON roles
+  FOR EACH ROW
+  EXECUTE FUNCTION sync_role_modules_on_role_rename();
+```
+
+---
+
+### `20260318000002_rls_write_protection.sql`
+
+**Problema resuelto:** Las tablas `roles` y `role_modules` tenían políticas `USING(true)` para todas las operaciones, lo que permitía que cualquier usuario autenticado creara, editara o eliminara roles y permisos directamente desde el navegador sin pasar por la aplicación.
+
+**Solución:** Separación de políticas READ vs WRITE con una función helper `is_app_admin()` que usa `SECURITY DEFINER` para evitar recursión RLS.
+
+- **READ** (`SELECT`): abierto a todos los autenticados (necesario para el flujo de login).
+- **WRITE** (`INSERT`, `UPDATE`, `DELETE`): solo si `is_app_admin()` devuelve `TRUE`.
+
+La función `is_app_admin()` considera admins a:
+- Usuarios con `is_super_admin = true` en `app_metadata`.
+- Empleados con rol `ADMIN`, `SUPER ADMIN` o `ADMINISTRADOR GENERAL`.
+- Empleados con cargo que contiene `SISTEMAS` o `JEFE DE GENTE`.
+
+---
+
+### `20260318000003_super_admin_flag.sql`
+
+**Problema resuelto:** El Super Admin estaba identificado por email hardcodeado en `AuthContext.jsx` (`if (email === 'admin@pauser.com')`), lo que requería un deploy para cambiar el usuario admin.
+
+**Solución:** El Super Admin se identifica por el flag `is_super_admin: true` en `app_metadata` de `auth.users`. Este campo solo es modificable con la `service role key`, por lo que no puede ser manipulado desde el navegador.
+
+```sql
+-- Setear el flag
+UPDATE auth.users
+SET raw_app_meta_data = raw_app_meta_data || '{"is_super_admin": true}'::jsonb
+WHERE LOWER(TRIM(email)) = 'admin@pauser.com';
+
+-- Para revocar
+-- UPDATE auth.users
+-- SET raw_app_meta_data = raw_app_meta_data - 'is_super_admin'
+-- WHERE LOWER(email) = 'admin@pauser.com';
+```
+
+---
+
+### `20260318000004_dashboard_stats_local_boss.sql`
+
+**Función creada:** `get_dashboard_stats_local_boss()`
+
+Devuelve las estadísticas del dashboard (total empleados, asistencias del día, solicitudes pendientes, tardanzas del mes) para roles de jefe local (JEFE DE VENTAS, SUPERVISOR, COORDINADOR), considerando:
+
+- Sede principal + BU principal del usuario autenticado.
+- Sedes adicionales de `user_allowed_sedes`.
+- Filtro de área restringida según el cargo (COMERCIAL, OPERACIONES, ALMACEN, etc.).
+
+Usa `COUNT(DISTINCT e.id)` para evitar duplicados al hacer `LEFT JOIN` con `job_positions`.
+
+```sql
+GRANT EXECUTE ON FUNCTION get_dashboard_stats_local_boss() TO authenticated;
+```
+
+---
+
+### `20260318000005_allowed_ids_local_boss.sql`
+
+**Función creada:** `get_allowed_employee_ids_local_boss()`
+
+Devuelve una tabla de UUIDs de empleados activos que el usuario autenticado tiene permitido gestionar. Se usa como **whitelist** en el dashboard de asistencias y vacaciones para reemplazar a `get_employees_by_user_area`, que no tiene conocimiento de `user_allowed_sedes`.
+
+La lógica de filtrado es idéntica a `get_dashboard_stats_local_boss`: sede principal + sedes manuales + filtro de área.
+
+```sql
+GRANT EXECUTE ON FUNCTION get_allowed_employee_ids_local_boss() TO authenticated;
+```
+
+---
+
+### `20260318000006_attendance_rpc_allowed_sedes.sql`
+
+**Problema resuelto:** La función `get_daily_attendance_report` solo filtraba empleados por `e.sede = v_user_sede`, ignorando las sedes adicionales de `user_allowed_sedes` para los roles de JEFE DE VENTAS, JEFE/COORDINADOR regional y SUPERVISOR.
+
+**Solución:** Se agregó una cláusula `OR EXISTS (user_allowed_sedes)` en cada rama del `CASE` que restringe por sede, para que también devuelva empleados de sedes manuales.
+
+La función actualizada tiene esta firma:
+
+```sql
+CREATE OR REPLACE FUNCTION public.get_daily_attendance_report(
+    p_date          date,
+    p_sede          text    DEFAULT NULL,
+    p_business_unit text    DEFAULT NULL,
+    p_search        text    DEFAULT NULL,
+    p_status        text    DEFAULT NULL,
+    p_page          integer DEFAULT 1,
+    p_limit         integer DEFAULT 20,
+    p_employee_id   uuid    DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE SECURITY DEFINER
+```
+
+Devuelve un `jsonb` con `{ data: [...], total: N }`.
+
+---
+
+## Archivos SQL independientes
+
+Además de las migraciones numeradas, el repositorio incluye scripts SQL de propósito específico:
+
+### `CREATE_USER_ALLOWED_SEDES.sql`
+
+Crea la tabla `user_allowed_sedes` con sus índices y política RLS. También contiene las sentencias para agregar las tablas `user_allowed_sedes` y `role_modules` a la publicación `supabase_realtime`.
+
+### `configure_supervisor_access.sql`
+
+Script de configuración para otorgar acceso a todos los cargos que contengan `COORDINADOR` o `SUPERVISOR` en la tabla `employees`. Itera sobre los cargos únicos, crea entradas en `roles` y asigna permisos en `role_modules` con lectura en todos los módulos y escritura en `attendance`, `requests`, `vacations` y `calendar`.
+
+También instala el trigger `tr_check_approval_perms` en `vacation_requests` para validar que supervisores y coordinadores solo aprueben solicitudes de su propia sede y unidad de negocio.
+
+---
+
+## Cómo aplicar migraciones
+
+<Tabs>
+  <Tab title="Supabase CLI">
+    ```bash
+    # Enlazar el proyecto local con el remoto
+    supabase link --project-ref <tu-project-ref>
+
+    # Aplicar todas las migraciones pendientes
+    supabase db push
+
+    # Ver el estado de las migraciones
+    supabase migration list
+    ```
+  </Tab>
+  <Tab title="SQL Editor (panel web)">
+    <Steps>
+      <Step title="Abrir el SQL Editor">
+        En el panel de Supabase, navega a **SQL Editor**.
+      </Step>
+      <Step title="Pegar y ejecutar cada archivo">
+        Copia el contenido de cada archivo `.sql` en orden y ejecútalo con el botón **Run**.
+      </Step>
+      <Step title="Verificar sin errores">
+        Confirma que cada sentencia termina con éxito antes de ejecutar la siguiente migración.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="psql directo">
+    ```bash
+    psql "postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres" \
+      -f supabase/migrations/20260318000001_role_rename_cascade.sql
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Aplica las migraciones siempre en orden numérico ascendente. Las migraciones posteriores pueden depender de objetos (funciones, tablas, índices) creados por las anteriores.
+</Warning>
